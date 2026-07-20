@@ -1,0 +1,1496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ICU ICD-10 Coder</title>
+<style>
+  /* ═══════════════════════════════════════════════════════════════════
+     TOKENS
+     Colour means physiology (acuity band only).
+     Ink means certainty.  Pen blue means you touched it.
+     No webfonts — the Coder and Reference tabs make no network calls.
+     ═══════════════════════════════════════════════════════════════════ */
+  :root {
+    color-scheme: light;
+    --chart:#F1F3F2; --sheet:#FFFFFF;
+    --ink:#16232E; --ink-2:#5C7080; --ink-3:#93A3AD;
+    --rule:#D3DAD9; --pen:#20539B; --pen-soft:rgba(32,83,155,.08);
+    --acuity-low:#1F7A5C; --acuity-mid:#C77B2A; --acuity-high:#B03A3A;
+    --serif:"Sitka Text",Charter,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    --util:Bahnschrift,"Avenir Next Condensed","Helvetica Neue",Arial,sans-serif;
+    --mono:Consolas,"SF Mono",Menlo,ui-monospace,monospace;
+    --gut:40px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --chart:#0F1A22; --sheet:#17242E;
+      --ink:#E3EBEF; --ink-2:#93A9B6; --ink-3:#5E7684;
+      --rule:#243541; --pen:#5C9BD6; --pen-soft:rgba(92,155,214,.1);
+      --acuity-low:#3FA383; --acuity-mid:#D9A05B; --acuity-high:#D46A6A;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --chart:#0F1A22; --sheet:#17242E;
+    --ink:#E3EBEF; --ink-2:#93A9B6; --ink-3:#5E7684;
+    --rule:#243541; --pen:#5C9BD6; --pen-soft:rgba(92,155,214,.1);
+    --acuity-low:#3FA383; --acuity-mid:#D9A05B; --acuity-high:#D46A6A;
+  }
+
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--chart); color:var(--ink);
+    font-family:var(--serif); font-size:16px; line-height:1.5;
+    -webkit-font-smoothing:antialiased; }
+  :focus-visible { outline:2px solid var(--pen); outline-offset:2px; }
+
+  /* ── masthead ───────────────────────────────────────────────────── */
+  header { position:sticky; top:0; z-index:20; background:var(--chart);
+    border-bottom:1px solid var(--rule); }
+  .masthead { max-width:1100px; margin:0 auto; padding:14px 24px 10px;
+    display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  h1 { font-family:var(--serif); font-size:28px; font-weight:600;
+    letter-spacing:-0.012em; margin:0; line-height:1.1; }
+  .sub { font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+  .spacer { flex:1; }
+  .themetog { background:none; border:1px solid var(--rule); color:var(--ink-2);
+    font-family:var(--util); font-size:11px; font-weight:600; text-transform:uppercase;
+    letter-spacing:.09em; padding:5px 11px; cursor:pointer; }
+  .themetog:hover { border-color:var(--pen); color:var(--pen); }
+  .tabs { max-width:1100px; margin:0 auto; padding:0 24px;
+    display:flex; gap:22px; }
+  .tab { font-family:var(--util); font-size:11px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.09em; color:var(--ink-3);
+    padding:7px 0; cursor:pointer; user-select:none;
+    border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .tab:hover { color:var(--ink-2); }
+  .tab.active { color:var(--ink); border-bottom-color:var(--pen); }
+
+  main { max-width:1100px; margin:0 auto; padding:26px 24px 40px; }
+
+  /* ── shared controls ────────────────────────────────────────────── */
+  .panes { display:flex; gap:14px; flex-wrap:wrap; }
+  .pane { flex:1 1 240px; display:flex; flex-direction:column; min-width:0; }
+  .pane-h, .section-h, .ai-lbl { font-family:var(--util); font-size:11px;
+    font-weight:600; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--ink-3); }
+  .pane-h { margin-bottom:6px; }
+  .section-h { margin:26px 0 10px; display:flex; align-items:center; gap:9px; }
+  .section-h .pill { font-family:var(--mono); font-size:11px; font-weight:400;
+    letter-spacing:0; text-transform:none; color:var(--ink-3); }
+  textarea, #search, .fb-form input, #ai-model, #groupFilter {
+    width:100%; background:var(--sheet); border:1px solid var(--rule);
+    border-radius:0; color:var(--ink); font-family:var(--serif); font-size:15px;
+    padding:11px 13px; outline:none; line-height:1.55; }
+  textarea { min-height:150px; resize:vertical; }
+  textarea:focus, #search:focus, .fb-form input:focus, #ai-model:focus, #groupFilter:focus {
+    border-color:var(--pen); box-shadow:inset 0 0 0 1px var(--pen); }
+  textarea::placeholder, #search::placeholder, .fb-form input::placeholder {
+    color:var(--ink-3); }
+  #ai-model, #groupFilter { width:auto; font-family:var(--util); font-size:12px;
+    padding:8px 11px; }
+  #groupFilter { flex:none; max-width:100%; }
+  #search { flex:1; min-width:200px; }
+  .toolbar, .controls { display:flex; gap:10px; flex-wrap:wrap;
+    align-items:center; margin:14px 0 0; }
+  .controls { margin:0 0 12px; }
+  .btn { background:none; border:1px solid var(--rule); color:var(--ink-2);
+    font-family:var(--util); font-size:11px; font-weight:600; text-transform:uppercase;
+    letter-spacing:.09em; padding:9px 16px; border-radius:0; cursor:pointer;
+    transition:border-color .12s, color .12s; }
+  .btn:hover { border-color:var(--pen); color:var(--pen); }
+  .btn-primary { background:var(--pen); border-color:var(--pen); color:var(--sheet); }
+  .btn-primary:hover { color:var(--sheet); opacity:.88; }
+  .btn-ghost { border-color:transparent; }
+  .btn-ghost:hover { border-color:var(--rule); }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .hint, .count, .ai-status { font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+  .hidden { display:none; }
+  .empty { text-align:center; color:var(--ink-3); padding:48px 20px;
+    font-family:var(--serif); font-size:15px; }
+  .empty strong { color:var(--ink-2); }
+
+  /* ── the certainty list (signature) ─────────────────────────────── */
+  .certainty { position:relative; margin-top:22px; padding-left:var(--gut); }
+  /* The rail is the 100% mark. Ticks fall away from it as confidence drops. */
+  .certainty::before { content:""; position:absolute; top:0; bottom:0; left:0;
+    width:1px; background:var(--rule); }
+  .res { display:flex; align-items:flex-start; gap:12px; cursor:pointer;
+    padding:9px 10px 9px 14px; position:relative;
+    animation:settle .16s ease-out both; animation-delay:calc(var(--i,0) * 18ms); }
+  .res:hover { background:var(--sheet); }
+  .gutter { position:absolute; left:calc(-1 * var(--gut)); top:0; bottom:0;
+    width:var(--gut); pointer-events:none; }
+  .gutter i { position:absolute; top:13px; width:2px; height:12px;
+    background:var(--ink-2);
+    left:calc(3px + (var(--gut) - 9px) * (1 - var(--tick,0) / 100)); }
+  .res-main { flex:1; min-width:0; }
+  .res-code { font-family:var(--mono); margin-right:7px; }
+  .res-desc { font-family:var(--serif); }
+  .res-sub { margin-top:4px; display:flex; gap:10px; flex-wrap:wrap;
+    align-items:baseline; }
+  .res-meta { font-family:var(--util); font-size:10px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.09em; color:var(--ink-3); flex:none; }
+  .ev { font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+  .neg-clause { font-family:var(--mono); font-size:11px; color:var(--ink-3);
+    margin-top:4px; }
+
+  .res.t1 .res-desc { font-size:17px; color:var(--ink); }
+  .res.t1 .res-code { font-size:15px; font-weight:700; color:var(--ink); }
+  .res.t1 .gutter i { background:var(--ink); }
+  .res.t2 { padding-top:7px; padding-bottom:7px; }
+  .res.t2 .res-desc { font-size:15px; color:var(--ink-2); }
+  .res.t2 .res-code { font-size:14px; font-weight:600; color:var(--ink-2); }
+  .res.neg { padding-top:7px; padding-bottom:7px; }
+  .res.neg .res-desc { font-size:14px; color:var(--ink-3); text-decoration:line-through; }
+  .res.neg .res-code { font-size:14px; font-weight:500; color:var(--ink-3); }
+
+  .cb { position:relative; width:16px; height:16px; flex:none; margin-top:4px; }
+  .cb input { position:absolute; inset:0; width:100%; height:100%; margin:0;
+    opacity:0; cursor:pointer; }
+  .cb .box { position:absolute; inset:0; border:1px solid var(--ink-3);
+    background:var(--sheet); pointer-events:none; }
+  .cb input:checked ~ .box { border-color:var(--pen); }
+  .cb input:checked ~ .box::after { content:""; position:absolute;
+    left:4px; top:0; width:5px; height:10px; border:solid var(--pen);
+    border-width:0 2px 2px 0; transform:rotate(42deg); }
+  .cb input:focus-visible ~ .box { outline:2px solid var(--pen); outline-offset:2px; }
+
+  .thresh { display:flex; align-items:center; gap:10px;
+    margin:14px 0 10px calc(-1 * var(--gut)); }
+  .thresh b { font-family:var(--util); font-size:10px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.13em; color:var(--ink-3); flex:none; }
+  .thresh i { flex:1; height:1px; background:var(--rule); transform-origin:left;
+    animation:draw .5s ease-out both; animation-delay:var(--d,0ms); }
+  .thresh i.pre { flex:none; width:var(--gut); }
+
+  @keyframes settle { from { opacity:0; transform:translateY(-3px); } }
+  @keyframes draw { from { transform:scaleX(0); } }
+
+  /* ── acuity band — the only colour in the app ───────────────────── */
+  .riskbar { border:1px solid var(--rule); background:var(--sheet);
+    padding:14px 16px; margin-top:26px; }
+  .rk-head { font-family:var(--util); font-size:11px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.09em; color:var(--ink-3);
+    margin-bottom:12px; }
+  .riskbar-row { display:flex; gap:20px; flex-wrap:wrap; }
+  .riskcell { flex:1 1 180px; display:flex; flex-direction:column; gap:5px; }
+  .rk-label { font-family:var(--util); font-size:10px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.09em; color:var(--ink-3); }
+  .rk-val { font-family:var(--mono); font-size:16px; font-weight:700; color:var(--ink); }
+  .rk-scale { display:flex; gap:3px; margin-top:2px; }
+  .rk-scale i { flex:1; height:5px; background:var(--rule); }
+  .lv1 .rk-val, .lv2 .rk-val { color:var(--acuity-low); }
+  .lv3 .rk-val { color:var(--acuity-mid); }
+  .lv4 .rk-val { color:var(--acuity-high); }
+  .lv1 .rk-scale i.on, .lv2 .rk-scale i.on { background:var(--acuity-low); }
+  .lv3 .rk-scale i.on { background:var(--acuity-mid); }
+  .lv4 .rk-scale i.on { background:var(--acuity-high); }
+  .rk-note { font-family:var(--util); font-size:11px; color:var(--ink-3);
+    margin-top:14px; line-height:1.5; letter-spacing:.01em; }
+
+  /* ── output boxes ───────────────────────────────────────────────── */
+  .output-box { margin-top:20px; }
+  .output-box textarea { min-height:90px; font-family:var(--mono); font-size:13px; }
+
+  /* ── reference tab ──────────────────────────────────────────────── */
+  table { width:100%; border-collapse:collapse; }
+  thead th { text-align:left; font-family:var(--util); font-size:10px;
+    font-weight:600; text-transform:uppercase; letter-spacing:.09em;
+    color:var(--ink-3); padding:0 12px 8px; border-bottom:1px solid var(--rule); }
+  tbody tr { border-bottom:1px solid var(--rule); }
+  tbody tr:hover { background:var(--sheet); }
+  td { padding:11px 12px; vertical-align:top; font-family:var(--serif); font-size:15px; }
+  .code { font-family:var(--mono); font-size:14px; font-weight:600; color:var(--ink);
+    cursor:pointer; white-space:nowrap; }
+  .code:hover { color:var(--pen); text-decoration:underline; }
+  .cat-tag { font-family:var(--util); font-size:10px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.09em; color:var(--ink-3); }
+  mark { background:var(--pen-soft); color:inherit;
+    box-shadow:inset 0 -2px 0 var(--pen); padding:0 1px; }
+  .count { margin-bottom:12px; }
+
+  /* ── AI summary tab ─────────────────────────────────────────────── */
+  /* Notes share one form. The stripe says which kind, so the frame never
+     has to shout — and colour stays reserved for the acuity band. */
+  .ai-note, .ai-banner, .ai-disclaimer { background:var(--sheet);
+    border:1px solid var(--rule); border-left:2px solid var(--pen);
+    padding:12px 15px; font-family:var(--serif); font-size:14px;
+    color:var(--ink-2); line-height:1.55; }
+  .ai-note { margin-bottom:16px; }
+  .ai-banner { margin-bottom:14px; }
+  .ai-banner.warn, .ai-disclaimer { border-left-color:var(--acuity-high); }
+  .ai-note strong, .ai-disclaimer strong { color:var(--ink); font-weight:600; }
+  .ai-modelrow { display:flex; gap:10px; flex-wrap:wrap; align-items:center;
+    margin-bottom:10px; }
+  .ai-progress { height:3px; background:var(--rule); overflow:hidden; margin:4px 0 8px; }
+  .ai-progress i { display:block; height:100%; width:0; background:var(--pen);
+    transition:width .2s; }
+  .ai-status { margin-bottom:12px; min-height:14px; }
+  .ai-out { border:1px solid var(--rule); background:var(--sheet); padding:16px 18px;
+    min-height:70px; white-space:pre-wrap; line-height:1.65;
+    font-family:var(--serif); font-size:16px; max-width:68ch; }
+  .ai-out:empty::before { content:"The summary will appear here."; color:var(--ink-3); }
+  /* Codes come from the deterministic engine, not the model — so they do not
+     share the model's voice or its typeface. */
+  .ai-codes { border:1px solid var(--rule); border-top:0; background:var(--sheet);
+    padding:14px 18px; white-space:pre-wrap; font-family:var(--mono);
+    font-size:13px; line-height:1.7; color:var(--ink-2); max-width:68ch; }
+  .ai-disclaimer { margin-top:18px; }
+
+  /* ── feedback tab ───────────────────────────────────────────────── */
+  .fb-form { max-width:640px; margin-top:16px; }
+  .fb-form .pane-h { display:block; margin:16px 0 6px; }
+  .fb-form textarea { min-height:120px; }
+
+  /* ── chart footing ──────────────────────────────────────────────── */
+  .footing { border-top:1px solid var(--rule); margin-top:44px; }
+  .footing p { max-width:1100px; margin:0 auto; padding:12px 24px 28px;
+    font-family:var(--util); font-size:10px; letter-spacing:.06em;
+    color:var(--ink-3); line-height:1.7; }
+
+  /* ── toast ──────────────────────────────────────────────────────── */
+  .toast { position:fixed; bottom:26px; left:50%;
+    transform:translateX(-50%) translateY(16px);
+    background:var(--ink); color:var(--chart); padding:10px 18px;
+    font-family:var(--util); font-size:11px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.09em;
+    opacity:0; pointer-events:none; transition:.2s; z-index:100; }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+  /* ── responsive ─────────────────────────────────────────────────── */
+  @media (max-width:760px) {
+    .panes { flex-direction:column; }
+    main { padding:20px 16px 30px; }
+    .masthead, .tabs, .footing p { padding-left:16px; padding-right:16px; }
+    .tabs { gap:16px; }
+  }
+  @media (max-width:560px) {
+    :root { --gut:22px; }
+    h1 { font-size:23px; }
+    .sub { display:none; }
+    .cat-tag { display:none; }
+    td { padding:9px 8px; }
+    .res.t1 .res-desc { font-size:16px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation:none !important; transition:none !important; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="masthead">
+    <h1>ICU ICD-10 Coder</h1>
+    <span class="sub">ICD-10-CM &middot; adult critical care &middot; on-device</span>
+    <span class="spacer"></span>
+    <button class="themetog" id="themeToggle" type="button">Dark</button>
+  </div>
+  <div class="tabs" role="tablist">
+    <span class="tab active" data-tab="coder" role="tab" tabindex="0">Coder</span>
+    <span class="tab" data-tab="ref" role="tab" tabindex="0">Reference list</span>
+    <span class="tab" data-tab="ai" role="tab" tabindex="0">AI Summary</span>
+    <span class="tab" data-tab="feedback" role="tab" tabindex="0">Feedback</span>
+  </div>
+</header>
+
+<main>
+  <!-- ══════════════ CODER TAB ══════════════ -->
+  <section id="tab-coder">
+    <div class="panes">
+      <div class="pane">
+        <label class="pane-h">History</label>
+        <textarea id="inHx" placeholder="Patient history &amp; presentation.  e.g. 68M with septic shock secondary to E. coli UTI; AKI on CRRT; hyperkalemia; acute hypoxic respiratory failure requiring intubation. Background CKD stage 4, T2DM, AF. No GI bleed."></textarea>
+      </div>
+      <div class="pane">
+        <label class="pane-h">Senior input</label>
+        <textarea id="inSenior" placeholder="Senior / consultant review, impression, and plan."></textarea>
+      </div>
+      <div class="pane">
+        <label class="pane-h">Extra information</label>
+        <textarea id="inExtra" placeholder="Investigations, microbiology, imaging, other notes."></textarea>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <button class="btn btn-primary" id="genBtn">Generate ICD-10 list</button>
+      <button class="btn" id="summaryBtn">Generate summary</button>
+      <button class="btn btn-ghost" id="clearBtn">Clear</button>
+      <span class="spacer"></span>
+      <span class="hint" id="matchStat"></span>
+    </div>
+
+    <div id="results"></div>
+    <div id="riskBar" class="riskbar hidden"></div>
+    <div id="summaryBox" class="output-box hidden">
+      <div class="toolbar" style="margin-bottom:8px">
+        <button class="btn btn-primary" id="copySummaryBtn">Copy summary</button>
+        <span class="hint" id="wordCount"></span>
+      </div>
+      <textarea id="summaryText" readonly placeholder="Structured summary appears here."></textarea>
+    </div>
+  </section>
+
+  <!-- ══════════════ REFERENCE TAB ══════════════ -->
+  <section id="tab-ref" class="hidden">
+    <div class="controls">
+      <input id="search" type="text" placeholder="Search code or diagnosis…" autocomplete="off">
+      <select id="groupFilter" aria-label="Filter by specialty group"></select>
+    </div>
+    <div class="count" id="refcount"></div>
+    <table>
+      <thead><tr><th style="width:110px">Code</th><th>Diagnosis</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="empty hidden" id="refempty">No matches.</div>
+  </section>
+
+  <!-- ══════════════ AI SUMMARY TAB ══════════════ -->
+  <section id="tab-ai" class="hidden">
+    <div id="ai-unsupported" class="ai-banner warn hidden">
+      This browser can't run local AI (no WebGPU). Use the latest desktop <strong>Chrome</strong> or <strong>Edge</strong>. The Coder and Reference tabs work everywhere.
+    </div>
+
+    <div class="ai-note">
+      <strong>Runs entirely in your browser.</strong> The clinical text you paste is processed on this device only &mdash; no server, no external API, nothing sent to OpenAI/Anthropic/Google. On first use the AI model (~1&ndash;2&nbsp;GB) downloads once from a CDN and is cached; after that it works offline.
+    </div>
+
+    <div class="ai-modelrow">
+      <label for="ai-model" class="ai-lbl">Model</label>
+      <select id="ai-model">
+        <option value="Llama-3.2-3B-Instruct-q4f16_1-MLC">Llama 3.2 &middot; 3B &mdash; balanced (default)</option>
+        <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 &middot; 1B &mdash; fastest, smallest</option>
+        <option value="Qwen2.5-3B-Instruct-q4f16_1-MLC">Qwen 2.5 &middot; 3B &mdash; alternative</option>
+      </select>
+      <button class="btn" id="ai-load">Load model</button>
+    </div>
+    <div class="ai-progress hidden" id="ai-progress"><i id="ai-progbar"></i></div>
+    <div class="ai-status" id="ai-status"></div>
+
+    <textarea id="ai-input" placeholder="Paste the clinical note or history to summarize&hellip;"></textarea>
+    <div class="toolbar">
+      <button class="btn btn-primary" id="ai-gen">Generate summary</button>
+      <button class="btn btn-ghost" id="ai-fromcoder">Use text from Coder tab</button>
+      <span class="spacer"></span>
+      <span class="hint" id="ai-timer"></span>
+    </div>
+
+    <div class="output-box" id="ai-outwrap" style="margin-top:14px">
+      <div class="section-h">Summary <span class="pill">draft</span></div>
+      <div class="ai-out" id="ai-out"></div>
+      <div class="ai-codes hidden" id="ai-codes"></div>
+    </div>
+
+    <div class="ai-disclaimer">
+      <strong>Draft only &mdash; not a source of truth.</strong> The model can miss or invent findings. Verify every summary against the original note before any clinical use. Do not paste real patient identifiers (name, MRN, DOB) during testing.
+    </div>
+  </section>
+
+  <!-- ══════════════ FEEDBACK TAB ══════════════ -->
+  <section id="tab-feedback" class="hidden">
+    <div class="ai-note">
+      <strong>We'd love your feedback.</strong> Spotted a wrong code, a missing diagnosis, or have a suggestion? Send it below and it goes straight to the maintainer's inbox &mdash; no email app needed. This form submits over the network to a third-party delivery service (Web3Forms); don't include patient identifiers.
+    </div>
+
+    <form id="fbForm" class="fb-form">
+      <label class="pane-h" for="fbEmail">Your email</label>
+      <input id="fbEmail" name="email" type="email" required placeholder="you@example.com" autocomplete="email">
+
+      <label class="pane-h" for="fbSubject">Subject</label>
+      <input id="fbSubject" name="subject" type="text" required placeholder="e.g. Wrong code for septic shock" value="ICU ICD-10 Coder feedback">
+
+      <label class="pane-h" for="fbMessage">Context / message</label>
+      <textarea id="fbMessage" name="message" required placeholder="Describe the issue or suggestion in as much detail as you like."></textarea>
+
+      <div class="toolbar" style="margin-top:12px">
+        <button class="btn btn-primary" type="submit" id="fbSend">Send feedback</button>
+        <span class="hint" id="fbStatus"></span>
+      </div>
+    </form>
+  </section>
+</main>
+
+<footer class="footing">
+  <p>Coding aid, not a source of truth. Validate every code and summary against the current ICD-10-CM/AM master and the original note before any clinical, billing, or documentation use. The SOI/ROM estimate is a transparent heuristic, not the validated 3M APR-DRG grouper. Do not enter patient identifiers.</p>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   1. CODE SET  (curated ICU ICD-10-CM seed list)
+   Edit / add rows here: ["CODE","Description","Specialty · Group"]
+   ═══════════════════════════════════════════════════════════════════ */
+const SEED = [
+  ["N17.9","Acute kidney injury, unspecified","Nephrology · AKI"],
+  ["N17.0","Acute kidney failure with tubular necrosis (ATN)","Nephrology · AKI"],
+  ["N17.1","Acute kidney failure with acute cortical necrosis","Nephrology · AKI"],
+  ["N17.2","Acute kidney failure with medullary necrosis","Nephrology · AKI"],
+  ["N14.11","Contrast-induced nephropathy","Nephrology · AKI"],
+  ["N18.1","Chronic kidney disease, stage 1","Nephrology · CKD"],
+  ["N18.2","Chronic kidney disease, stage 2 (mild)","Nephrology · CKD"],
+  ["N18.30","Chronic kidney disease, stage 3 unspecified","Nephrology · CKD"],
+  ["N18.31","Chronic kidney disease, stage 3a","Nephrology · CKD"],
+  ["N18.32","Chronic kidney disease, stage 3b","Nephrology · CKD"],
+  ["N18.4","Chronic kidney disease, stage 4 (severe)","Nephrology · CKD"],
+  ["N18.5","Chronic kidney disease, stage 5","Nephrology · CKD"],
+  ["N18.6","End stage renal disease","Nephrology · CKD"],
+  ["N18.9","Chronic kidney disease, unspecified","Nephrology · CKD"],
+  ["Z99.2","Dependence on renal dialysis","Nephrology · Dialysis"],
+  ["Z49.01","Encounter for fitting/adjustment of extracorporeal dialysis catheter","Nephrology · Dialysis"],
+  ["Z49.31","Encounter for adequacy testing for hemodialysis","Nephrology · Dialysis"],
+  ["Z49.32","Encounter for adequacy testing for peritoneal dialysis","Nephrology · Dialysis"],
+  ["T82.49XA","Mechanical complication of vascular dialysis catheter, initial","Nephrology · Dialysis"],
+  ["Z91.15","Patient noncompliance with renal dialysis","Nephrology · Dialysis"],
+  ["E87.5","Hyperkalemia","Nephrology · Electrolyte"],
+  ["E87.6","Hypokalemia","Nephrology · Electrolyte"],
+  ["E87.0","Hyperosmolality and hypernatremia","Nephrology · Electrolyte"],
+  ["E87.1","Hypo-osmolality and hyponatremia","Nephrology · Electrolyte"],
+  ["E83.42","Hypomagnesemia","Nephrology · Electrolyte"],
+  ["E83.51","Hypocalcemia","Nephrology · Electrolyte"],
+  ["E83.52","Hypercalcemia","Nephrology · Electrolyte"],
+  ["E87.2","Acidosis","Nephrology · Electrolyte"],
+  ["E87.3","Alkalosis","Nephrology · Electrolyte"],
+  ["E87.4","Mixed disorder of acid-base balance","Nephrology · Electrolyte"],
+  ["E86.0","Dehydration","Nephrology · Electrolyte"],
+  ["E86.1","Hypovolemia","Nephrology · Electrolyte"],
+  ["N04.9","Nephrotic syndrome, unspecified","Nephrology · Other"],
+  ["N05.9","Nephritic syndrome, unspecified","Nephrology · Other"],
+  ["N28.9","Disorder of kidney and ureter, unspecified","Nephrology · Other"],
+  ["I12.0","Hypertensive CKD with stage 5 CKD or ESRD","Nephrology · Other"],
+  ["I12.9","Hypertensive CKD with stage 1-4 or unspecified CKD","Nephrology · Other"],
+  ["I13.0","Hypertensive heart & CKD with heart failure, stage 1-4","Nephrology · Other"],
+  ["E11.22","Type 2 diabetes mellitus with diabetic CKD","Nephrology · Other"],
+  ["A41.9","Sepsis, unspecified organism","Critical Care · Sepsis"],
+  ["A41.51","Sepsis due to Escherichia coli","Critical Care · Sepsis"],
+  ["A41.01","Sepsis due to MSSA","Critical Care · Sepsis"],
+  ["A41.02","Sepsis due to MRSA","Critical Care · Sepsis"],
+  ["R65.20","Severe sepsis without septic shock","Critical Care · Sepsis"],
+  ["R65.21","Severe sepsis with septic shock","Critical Care · Sepsis"],
+  ["R65.10","SIRS of non-infectious origin without acute organ dysfunction","Critical Care · Sepsis"],
+  ["J96.00","Acute respiratory failure, unspecified hypoxia/hypercapnia","Critical Care · Respiratory"],
+  ["J96.01","Acute respiratory failure with hypoxia","Critical Care · Respiratory"],
+  ["J96.02","Acute respiratory failure with hypercapnia","Critical Care · Respiratory"],
+  ["J96.20","Acute & chronic respiratory failure, unspecified","Critical Care · Respiratory"],
+  ["J80","Acute respiratory distress syndrome (ARDS)","Critical Care · Respiratory"],
+  ["J96.90","Respiratory failure, unspecified","Critical Care · Respiratory"],
+  ["J95.851","Ventilator associated pneumonia","Critical Care · Respiratory"],
+  ["Z99.11","Dependence on ventilator","Critical Care · Respiratory"],
+  ["J18.9","Pneumonia, unspecified organism","Critical Care · Respiratory"],
+  ["J44.1","COPD with acute exacerbation","Critical Care · Respiratory"],
+  ["R57.0","Cardiogenic shock","Critical Care · Shock"],
+  ["R57.1","Hypovolemic shock","Critical Care · Shock"],
+  ["R57.9","Shock, unspecified","Critical Care · Shock"],
+  ["I46.9","Cardiac arrest, cause unspecified","Critical Care · Shock"],
+  ["I50.9","Heart failure, unspecified","Critical Care · Shock"],
+  ["I21.4","Non-ST elevation (NSTEMI) myocardial infarction","Critical Care · Shock"],
+  ["I49.01","Ventricular fibrillation","Critical Care · Shock"],
+  ["I48.91","Atrial fibrillation, unspecified","Critical Care · Shock"],
+  ["K72.00","Acute hepatic failure without coma","Critical Care · Organ Dysfn"],
+  ["D65","Disseminated intravascular coagulation (DIC)","Critical Care · Organ Dysfn"],
+  ["G93.40","Encephalopathy, unspecified","Critical Care · Organ Dysfn"],
+  ["G93.41","Metabolic encephalopathy","Critical Care · Organ Dysfn"],
+  ["R40.20","Unspecified coma","Critical Care · Organ Dysfn"],
+  ["E11.10","Type 2 DM with ketoacidosis without coma","Critical Care · Organ Dysfn"],
+  ["E10.10","Type 1 DM with ketoacidosis without coma","Critical Care · Organ Dysfn"],
+  ["R65.11","SIRS of non-infectious origin with acute organ dysfunction","Critical Care · Organ Dysfn"],
+  ["Z95.828","Presence of other vascular implants and grafts","Critical Care · Status"],
+  ["Z45.2","Encounter for adjustment/management of vascular access device","Critical Care · Status"],
+  ["T81.44XA","Sepsis following a procedure, initial encounter","Critical Care · Status"],
+  ["I21.3","ST elevation (STEMI) myocardial infarction of unspecified site","Cardiology · ACS"],
+  ["I21.A1","Myocardial infarction type 2 (demand ischemia)","Cardiology · ACS"],
+  ["I21.9","Acute myocardial infarction, unspecified","Cardiology · ACS"],
+  ["I20.0","Unstable angina","Cardiology · ACS"],
+  ["I24.8","Other forms of acute ischemic heart disease","Cardiology · ACS"],
+  ["I50.21","Acute systolic (congestive) heart failure (HFrEF)","Cardiology · Heart Failure"],
+  ["I50.23","Acute on chronic systolic heart failure","Cardiology · Heart Failure"],
+  ["I50.31","Acute diastolic (congestive) heart failure (HFpEF)","Cardiology · Heart Failure"],
+  ["I50.33","Acute on chronic diastolic heart failure","Cardiology · Heart Failure"],
+  ["I50.41","Acute combined systolic and diastolic heart failure","Cardiology · Heart Failure"],
+  ["I50.814","Right heart failure due to left heart failure","Cardiology · Heart Failure"],
+  ["I48.0","Paroxysmal atrial fibrillation","Cardiology · Arrhythmia"],
+  ["I48.21","Permanent atrial fibrillation","Cardiology · Arrhythmia"],
+  ["I47.2","Ventricular tachycardia","Cardiology · Arrhythmia"],
+  ["I47.1","Supraventricular tachycardia","Cardiology · Arrhythmia"],
+  ["I44.2","Atrioventricular block, complete (3rd degree)","Cardiology · Arrhythmia"],
+  ["I49.5","Sick sinus syndrome","Cardiology · Arrhythmia"],
+  ["R00.1","Bradycardia, unspecified","Cardiology · Arrhythmia"],
+  ["I26.99","Pulmonary embolism without acute cor pulmonale","Cardiology · Other"],
+  ["I26.09","Pulmonary embolism with acute cor pulmonale","Cardiology · Other"],
+  ["I71.01","Dissection of thoracic aorta","Cardiology · Other"],
+  ["I40.9","Acute myocarditis, unspecified","Cardiology · Other"],
+  ["I30.9","Acute pericarditis, unspecified","Cardiology · Other"],
+  ["I31.4","Cardiac tamponade","Cardiology · Other"],
+  ["I16.1","Hypertensive emergency","Cardiology · Other"],
+  ["D69.6","Thrombocytopenia, unspecified","Heme-Onc · Cytopenia"],
+  ["D69.59","Other secondary thrombocytopenia","Heme-Onc · Cytopenia"],
+  ["D70.9","Neutropenia, unspecified","Heme-Onc · Cytopenia"],
+  ["D70.1","Agranulocytosis secondary to cancer chemotherapy","Heme-Onc · Cytopenia"],
+  ["R50.81","Fever presenting with conditions classified elsewhere (febrile neutropenia)","Heme-Onc · Cytopenia"],
+  ["D61.818","Other pancytopenia","Heme-Onc · Cytopenia"],
+  ["D64.9","Anemia, unspecified","Heme-Onc · Cytopenia"],
+  ["D62","Acute posthemorrhagic anemia","Heme-Onc · Cytopenia"],
+  ["D68.9","Coagulation defect, unspecified","Heme-Onc · Coagulation"],
+  ["D68.32","Hemorrhagic disorder due to extrinsic anticoagulants","Heme-Onc · Coagulation"],
+  ["D69.42","Congenital and acquired thrombotic thrombocytopenic purpura (TTP)","Heme-Onc · Coagulation"],
+  ["M31.1","Thrombotic microangiopathy (TMA/HUS)","Heme-Onc · Coagulation"],
+  ["D75.82","Heparin induced thrombocytopenia (HIT)","Heme-Onc · Coagulation"],
+  ["E88.3","Tumor lysis syndrome","Heme-Onc · Onc Emergency"],
+  ["G92.9","Toxic encephalopathy, unspecified (e.g. CAR-T / ICANS)","Heme-Onc · Onc Emergency"],
+  ["D89.834","Cytokine release syndrome, grade 4","Heme-Onc · Onc Emergency"],
+  ["G95.20","Cord compression, unspecified (malignant)","Heme-Onc · Onc Emergency"],
+  ["I87.1","Compression of vein (SVC syndrome)","Heme-Onc · Onc Emergency"],
+  ["C95.90","Leukemia, unspecified, not in remission","Heme-Onc · Malignancy"],
+  ["C80.1","Malignant (primary) neoplasm, unspecified","Heme-Onc · Malignancy"],
+  ["C77.9","Secondary malignant neoplasm of lymph nodes, unspecified","Heme-Onc · Malignancy"],
+  ["C78.00","Secondary malignant neoplasm of unspecified lung","Heme-Onc · Malignancy"],
+  ["Z51.11","Encounter for antineoplastic chemotherapy","Heme-Onc · Malignancy"],
+  ["K72.01","Acute and subacute hepatic failure with coma","Hepatology · Liver Failure"],
+  ["K72.10","Chronic hepatic failure without coma","Hepatology · Liver Failure"],
+  ["K72.90","Hepatic failure, unspecified, without coma","Hepatology · Liver Failure"],
+  ["K76.7","Hepatorenal syndrome","Hepatology · Liver Failure"],
+  ["K74.60","Unspecified cirrhosis of liver","Hepatology · Cirrhosis"],
+  ["K70.31","Alcoholic cirrhosis of liver with ascites","Hepatology · Cirrhosis"],
+  ["K70.41","Alcoholic hepatic failure with coma","Hepatology · Cirrhosis"],
+  ["R18.8","Other ascites","Hepatology · Cirrhosis"],
+  ["K76.6","Portal hypertension","Hepatology · Cirrhosis"],
+  ["I85.01","Esophageal varices with bleeding","Hepatology · Cirrhosis"],
+  ["K70.11","Alcoholic hepatitis with ascites","Hepatology · Cirrhosis"],
+  ["K76.81","Hepatopulmonary syndrome","Hepatology · Cirrhosis"],
+  ["K72.91","Hepatic encephalopathy (hepatic failure w/ coma, unspec)","Hepatology · Cirrhosis"],
+  ["K65.2","Spontaneous bacterial peritonitis","Hepatology · Cirrhosis"],
+  ["K92.2","Gastrointestinal hemorrhage, unspecified","Gastroenterology · Bleeding"],
+  ["K92.0","Hematemesis","Gastroenterology · Bleeding"],
+  ["K92.1","Melena","Gastroenterology · Bleeding"],
+  ["K25.0","Acute gastric ulcer with hemorrhage","Gastroenterology · Bleeding"],
+  ["K26.0","Acute duodenal ulcer with hemorrhage","Gastroenterology · Bleeding"],
+  ["K62.5","Hemorrhage of anus and rectum (lower GI bleed)","Gastroenterology · Bleeding"],
+  ["K85.90","Acute pancreatitis without necrosis or infection, unspecified","Gastroenterology · Pancreas/Bowel"],
+  ["K85.91","Acute pancreatitis with uninfected necrosis","Gastroenterology · Pancreas/Bowel"],
+  ["K85.92","Acute pancreatitis with infected necrosis","Gastroenterology · Pancreas/Bowel"],
+  ["K56.609","Unspecified intestinal obstruction, unspecified as partial/complete","Gastroenterology · Pancreas/Bowel"],
+  ["K56.7","Ileus, unspecified","Gastroenterology · Pancreas/Bowel"],
+  ["K55.069","Acute (reversible) ischemia of intestine, extent unspecified","Gastroenterology · Pancreas/Bowel"],
+  ["K65.0","Generalized (acute) peritonitis","Gastroenterology · Pancreas/Bowel"],
+  ["K57.92","Diverticulitis of intestine, unspecified, w/o perforation or abscess","Gastroenterology · Pancreas/Bowel"],
+  ["A04.7","Enterocolitis due to Clostridium difficile, unspecified","Gastroenterology · Pancreas/Bowel"],
+  ["K83.09","Other cholangitis","Gastroenterology · Pancreas/Bowel"],
+  ["E11.11","Type 2 DM with ketoacidosis with coma","Endocrinology · Glycemic"],
+  ["E11.00","Type 2 DM with hyperosmolarity without NKHHC (HHS)","Endocrinology · Glycemic"],
+  ["E11.01","Type 2 DM with hyperosmolarity with coma","Endocrinology · Glycemic"],
+  ["E11.641","Type 2 DM with hypoglycemia with coma","Endocrinology · Glycemic"],
+  ["E16.2","Hypoglycemia, unspecified","Endocrinology · Glycemic"],
+  ["E11.65","Type 2 DM with hyperglycemia","Endocrinology · Glycemic"],
+  ["E05.91","Thyrotoxicosis with thyroid storm","Endocrinology · Thyroid/Adrenal"],
+  ["E03.5","Myxedema coma","Endocrinology · Thyroid/Adrenal"],
+  ["E27.2","Addisonian crisis (adrenal crisis)","Endocrinology · Thyroid/Adrenal"],
+  ["E27.40","Unspecified adrenocortical insufficiency","Endocrinology · Thyroid/Adrenal"],
+  ["E03.9","Hypothyroidism, unspecified","Endocrinology · Thyroid/Adrenal"],
+  ["E05.90","Thyrotoxicosis, unspecified, without crisis","Endocrinology · Thyroid/Adrenal"],
+  ["E22.2","Syndrome of inappropriate ADH secretion (SIADH)","Endocrinology · Other"],
+  ["E23.2","Diabetes insipidus","Endocrinology · Other"],
+  ["E83.118","Other disorders of iron metabolism","Endocrinology · Other"],
+  ["I63.9","Cerebral infarction, unspecified","Neurology · Stroke"],
+  ["I61.9","Nontraumatic intracerebral hemorrhage, unspecified","Neurology · Stroke"],
+  ["I60.9","Nontraumatic subarachnoid hemorrhage, unspecified","Neurology · Stroke"],
+  ["I62.00","Nontraumatic subdural hemorrhage, unspecified","Neurology · Stroke"],
+  ["G45.9","Transient cerebral ischemic attack, unspecified (TIA)","Neurology · Stroke"],
+  ["G40.911","Epilepsy, unspecified, intractable, with status epilepticus","Neurology · Seizure/Enceph"],
+  ["G40.901","Epilepsy, unspecified, not intractable, with status epilepticus","Neurology · Seizure/Enceph"],
+  ["R56.9","Unspecified convulsions","Neurology · Seizure/Enceph"],
+  ["G04.90","Encephalitis and encephalomyelitis, unspecified","Neurology · Seizure/Enceph"],
+  ["G93.6","Cerebral edema","Neurology · Seizure/Enceph"],
+  ["G93.5","Compression of brain","Neurology · Seizure/Enceph"],
+  ["R40.2120","Coma scale, eyes open, never, unspecified time","Neurology · Coma/NM"],
+  ["G91.1","Obstructive hydrocephalus","Neurology · Coma/NM"],
+  ["G61.0","Guillain-Barre syndrome","Neurology · Coma/NM"],
+  ["G70.01","Myasthenia gravis with (acute) exacerbation (crisis)","Neurology · Coma/NM"],
+  ["G00.9","Bacterial meningitis, unspecified","Neurology · Coma/NM"],
+  ["A87.9","Viral meningitis, unspecified","Neurology · Coma/NM"],
+  ["G83.9","Paralytic syndrome, unspecified","Neurology · Coma/NM"],
+  ["I67.83","Posterior reversible encephalopathy syndrome (PRES)","Neurology · Coma/NM"],
+
+  // ── Critical Care · Sepsis (organism-specific) ──
+  ["A41.50","Gram-negative sepsis, unspecified","Critical Care · Sepsis"],
+  ["A41.52","Sepsis due to Pseudomonas","Critical Care · Sepsis"],
+  ["A41.53","Sepsis due to Serratia","Critical Care · Sepsis"],
+  ["A41.81","Sepsis due to Enterococcus","Critical Care · Sepsis"],
+  ["A41.89","Other specified sepsis","Critical Care · Sepsis"],
+  ["A41.3","Sepsis due to Haemophilus influenzae","Critical Care · Sepsis"],
+  ["A41.4","Sepsis due to anaerobes","Critical Care · Sepsis"],
+  ["A40.0","Sepsis due to streptococcus, group A","Critical Care · Sepsis"],
+  ["A40.1","Sepsis due to streptococcus, group B","Critical Care · Sepsis"],
+  ["A40.9","Streptococcal sepsis, unspecified","Critical Care · Sepsis"],
+  ["B37.7","Candidal sepsis (candidemia)","Critical Care · Sepsis"],
+  ["R78.81","Bacteremia","Critical Care · Sepsis"],
+  ["A49.9","Bacterial infection, unspecified","Critical Care · Sepsis"],
+  ["A39.4","Meningococcemia, unspecified","Critical Care · Sepsis"],
+
+  // ── Infectious Disease · Source ──
+  ["N39.0","Urinary tract infection, site not specified","Infectious Disease · Source"],
+  ["N10","Acute pyelonephritis","Infectious Disease · Source"],
+  ["I33.0","Acute and subacute infective endocarditis","Infectious Disease · Source"],
+  ["L03.90","Cellulitis, unspecified","Infectious Disease · Source"],
+  ["M72.6","Necrotizing fasciitis","Infectious Disease · Source"],
+  ["M86.9","Osteomyelitis, unspecified","Infectious Disease · Source"],
+  ["K81.0","Acute cholecystitis","Infectious Disease · Source"],
+  ["B49","Unspecified mycosis (invasive fungal infection)","Infectious Disease · Source"],
+  ["U07.1","COVID-19","Infectious Disease · Source"],
+  ["J12.82","Pneumonia due to COVID-19","Infectious Disease · Source"],
+  ["J11.1","Influenza with other respiratory manifestations, virus not identified","Infectious Disease · Source"],
+  ["T80.211A","Bloodstream infection due to central venous catheter (CLABSI), initial","Infectious Disease · Source"],
+  ["T83.511A","Infection due to indwelling urinary catheter (CAUTI), initial","Infectious Disease · Source"],
+
+  // ── Critical Care · Respiratory (additional) ──
+  ["J81.0","Acute pulmonary edema","Critical Care · Respiratory"],
+  ["J90","Pleural effusion, not elsewhere classified","Critical Care · Respiratory"],
+  ["J93.9","Pneumothorax, unspecified","Critical Care · Respiratory"],
+  ["J93.0","Spontaneous tension pneumothorax","Critical Care · Respiratory"],
+  ["J98.11","Atelectasis","Critical Care · Respiratory"],
+  ["R04.2","Hemoptysis","Critical Care · Respiratory"],
+  ["J69.0","Pneumonitis due to inhalation of food and vomit (aspiration)","Critical Care · Respiratory"],
+  ["J15.211","Pneumonia due to MSSA","Critical Care · Respiratory"],
+  ["J15.212","Pneumonia due to MRSA","Critical Care · Respiratory"],
+  ["J13","Pneumonia due to Streptococcus pneumoniae","Critical Care · Respiratory"],
+  ["J15.0","Pneumonia due to Klebsiella pneumoniae","Critical Care · Respiratory"],
+  ["J15.1","Pneumonia due to Pseudomonas","Critical Care · Respiratory"],
+  ["J45.901","Unspecified asthma with (acute) exacerbation","Critical Care · Respiratory"],
+  ["J45.902","Unspecified asthma with status asthmaticus","Critical Care · Respiratory"],
+  ["I27.20","Pulmonary hypertension, unspecified","Critical Care · Respiratory"],
+  ["J95.821","Acute postprocedural respiratory failure","Critical Care · Respiratory"],
+  ["J96.10","Chronic respiratory failure, unspecified","Critical Care · Respiratory"],
+  ["R09.02","Hypoxemia","Critical Care · Respiratory"],
+
+  // ── Cardiology · additional ──
+  ["I46.2","Cardiac arrest due to underlying cardiac condition","Critical Care · Shock"],
+  ["I46.8","Cardiac arrest due to other underlying condition","Critical Care · Shock"],
+  ["I49.02","Ventricular flutter","Cardiology · Arrhythmia"],
+  ["I44.1","Atrioventricular block, second degree","Cardiology · Arrhythmia"],
+  ["I42.0","Dilated cardiomyopathy","Cardiology · Other"],
+  ["I42.9","Cardiomyopathy, unspecified","Cardiology · Other"],
+  ["I51.81","Takotsubo syndrome","Cardiology · Other"],
+  ["I27.81","Cor pulmonale (chronic)","Cardiology · Other"],
+  ["I35.0","Nonrheumatic aortic (valve) stenosis","Cardiology · Other"],
+  ["I34.0","Nonrheumatic mitral (valve) insufficiency","Cardiology · Other"],
+  ["I11.0","Hypertensive heart disease with heart failure","Cardiology · Heart Failure"],
+  ["I95.1","Orthostatic hypotension","Cardiology · Other"],
+  ["I95.81","Postprocedural hypotension","Cardiology · Other"],
+  ["I95.9","Hypotension, unspecified","Cardiology · Other"],
+
+  // ── Critical Care · VTE ──
+  ["I82.409","Acute embolism/thrombosis of unspecified deep veins of lower extremity (DVT)","Critical Care · VTE"],
+  ["I82.90","Acute embolism and thrombosis of unspecified vein","Critical Care · VTE"],
+  ["I26.90","Septic pulmonary embolism without acute cor pulmonale","Critical Care · VTE"],
+
+  // ── Critical Care · Shock (additional) ──
+  ["R57.8","Other shock","Critical Care · Shock"],
+  ["T78.2XXA","Anaphylactic shock, unspecified, initial encounter","Critical Care · Shock"],
+
+  // ── Neurology · additional ──
+  ["G93.1","Anoxic brain damage, not elsewhere classified","Neurology · Coma/NM"],
+  ["F05","Delirium due to known physiological condition","Neurology · Seizure/Enceph"],
+  ["R41.82","Altered mental status, unspecified","Neurology · Seizure/Enceph"],
+  ["G21.0","Malignant neuroleptic syndrome (NMS)","Neurology · Seizure/Enceph"],
+  ["E51.2","Wernicke encephalopathy","Neurology · Seizure/Enceph"],
+  ["F10.239","Alcohol dependence with withdrawal, unspecified","Neurology · Seizure/Enceph"],
+  ["F10.231","Alcohol dependence with withdrawal delirium (DTs)","Neurology · Seizure/Enceph"],
+  ["I67.6","Nonpyogenic thrombosis of intracranial venous system (CVST)","Neurology · Stroke"],
+  ["S06.5X0A","Traumatic subdural hemorrhage without loss of consciousness, initial","Neurology · Trauma"],
+  ["S06.6X0A","Traumatic subarachnoid hemorrhage without loss of consciousness, initial","Neurology · Trauma"],
+  ["S06.4X0A","Epidural hemorrhage without loss of consciousness, initial","Neurology · Trauma"],
+  ["S06.2X0A","Diffuse traumatic brain injury without loss of consciousness, initial","Neurology · Trauma"],
+
+  // ── Toxicology · Poisoning (accidental, initial encounter) ──
+  ["T39.1X1A","Poisoning by 4-aminophenol derivatives (acetaminophen/paracetamol), accidental, initial","Toxicology · Poisoning"],
+  ["T39.011A","Poisoning by aspirin (salicylate), accidental, initial","Toxicology · Poisoning"],
+  ["T40.2X1A","Poisoning by other opioids, accidental, initial","Toxicology · Poisoning"],
+  ["T42.4X1A","Poisoning by benzodiazepines, accidental, initial","Toxicology · Poisoning"],
+  ["T40.5X1A","Poisoning by cocaine, accidental, initial","Toxicology · Poisoning"],
+  ["T51.0X1A","Toxic effect of ethanol (alcohol poisoning), accidental, initial","Toxicology · Poisoning"],
+  ["T58.91XA","Toxic effect of carbon monoxide from unspecified source, accidental, initial","Toxicology · Poisoning"],
+  ["T50.901A","Poisoning by unspecified drugs/medicaments, accidental, initial","Toxicology · Poisoning"],
+
+  // ── Nephrology · additional ──
+  ["N13.30","Unspecified hydronephrosis","Nephrology · Other"],
+  ["N20.0","Calculus of kidney","Nephrology · Other"],
+  ["N00.9","Acute nephritic syndrome with unspecified morphologic changes","Nephrology · Other"],
+  ["N01.9","Rapidly progressive nephritic syndrome, unspecified","Nephrology · Other"],
+  ["T86.11","Kidney transplant rejection","Nephrology · Other"],
+  ["M62.82","Rhabdomyolysis","Nephrology · AKI"],
+  ["E87.70","Fluid overload, unspecified","Nephrology · Electrolyte"],
+  ["E87.71","Transfusion associated circulatory overload (TACO)","Nephrology · Electrolyte"],
+
+  // ── Metabolic / Electrolyte (additional) ──
+  ["E83.39","Other disorders of phosphorus metabolism (hyper/hypophosphatemia)","Nephrology · Electrolyte"],
+  ["E79.0","Hyperuricemia without inflammatory arthritis","Nephrology · Electrolyte"],
+  ["E86.9","Volume depletion, unspecified","Nephrology · Electrolyte"],
+  ["R73.9","Hyperglycemia, unspecified","Endocrinology · Glycemic"],
+  ["E88.9","Metabolic disorder, unspecified","Endocrinology · Other"],
+
+  // ── Gastroenterology · additional ──
+  ["K65.1","Peritoneal abscess","Gastroenterology · Pancreas/Bowel"],
+  ["K63.1","Perforation of intestine (nontraumatic)","Gastroenterology · Pancreas/Bowel"],
+  ["K59.31","Toxic megacolon","Gastroenterology · Pancreas/Bowel"],
+  ["E43","Unspecified severe protein-calorie malnutrition","Gastroenterology · Nutrition"],
+  ["E44.0","Moderate protein-calorie malnutrition","Gastroenterology · Nutrition"],
+  ["E46","Protein-calorie malnutrition, unspecified","Gastroenterology · Nutrition"],
+
+  // ── Heme-Onc · additional ──
+  ["D57.00","Sickle cell disease with crisis, unspecified (Hb-SS)","Heme-Onc · Other"],
+  ["D59.9","Acquired hemolytic anemia, unspecified","Heme-Onc · Other"],
+  ["D76.1","Hemophagocytic lymphohistiocytosis (HLH)","Heme-Onc · Other"],
+  ["R58","Hemorrhage, not elsewhere classified","Heme-Onc · Coagulation"],
+
+  // ── Critical Care · Signs/Symptoms ──
+  ["R50.9","Fever, unspecified","Critical Care · Signs"],
+  ["R55","Syncope and collapse","Critical Care · Signs"],
+  ["R06.00","Dyspnea, unspecified","Critical Care · Signs"],
+  ["R00.0","Tachycardia, unspecified","Critical Care · Signs"],
+  ["R34","Anuria and oliguria","Critical Care · Signs"],
+  ["R31.9","Hematuria, unspecified","Critical Care · Signs"],
+  ["T68.XXXA","Hypothermia, initial encounter","Critical Care · Signs"],
+
+  // ── Critical Care · Status / Devices / Care ──
+  ["Z66","Do not resuscitate (DNR) status","Critical Care · Status"],
+  ["Z51.5","Encounter for palliative care","Critical Care · Status"],
+  ["Z93.0","Tracheostomy status","Critical Care · Status"],
+  ["Z93.1","Gastrostomy status","Critical Care · Status"],
+  ["Z79.01","Long-term (current) use of anticoagulants","Critical Care · Status"],
+  ["Z79.4","Long-term (current) use of insulin","Critical Care · Status"],
+  ["Z95.0","Presence of cardiac pacemaker","Critical Care · Status"],
+  ["Z95.810","Presence of automatic (implantable) cardiac defibrillator (AICD)","Critical Care · Status"],
+  ["Z94.0","Kidney transplant status","Critical Care · Status"],
+  ["Z94.1","Heart transplant status","Critical Care · Status"],
+  ["Z94.4","Liver transplant status","Critical Care · Status"],
+  ["Z94.83","Bone marrow transplant status","Critical Care · Status"],
+
+  // ── Obstetrics · Critical Care ──
+  ["O14.10","Severe pre-eclampsia, unspecified trimester","Obstetrics · Critical Care"],
+  ["O15.9","Eclampsia, unspecified as to time period","Obstetrics · Critical Care"],
+  ["O14.20","HELLP syndrome, unspecified trimester","Obstetrics · Critical Care"],
+  ["O90.3","Peripartum cardiomyopathy","Obstetrics · Critical Care"],
+  ["O88.13","Amniotic fluid embolism, third trimester","Obstetrics · Critical Care"],
+  ["O72.1","Other immediate postpartum hemorrhage","Obstetrics · Critical Care"],
+];
+
+/* ═══════════════════════════════════════════════════════════════════
+   2. SYNONYM / ABBREVIATION EXPANSION
+   Maps clinician shorthand -> canonical phrase found in descriptions.
+   ═══════════════════════════════════════════════════════════════════ */
+const SYN = {
+  "aki":"acute kidney injury","arf":"acute kidney injury","acute renal failure":"acute kidney injury",
+  "atn":"tubular necrosis","ckd":"chronic kidney disease","esrd":"end stage renal disease",
+  "eskd":"end stage renal disease","hd":"hemodialysis","ihd":"hemodialysis","crrt":"renal dialysis",
+  "cvvh":"renal dialysis","cvvhdf":"renal dialysis","rrt":"renal dialysis","pd":"peritoneal dialysis",
+  "cin":"contrast-induced nephropathy","ci-aki":"contrast-induced nephropathy",
+  "hyperk":"hyperkalemia","hyperkalaemia":"hyperkalemia","hypok":"hypokalemia","hypokalaemia":"hypokalemia",
+  "hypernatraemia":"hypernatremia","hyponatraemia":"hyponatremia",
+  "hypomag":"hypomagnesemia","hypomagnesaemia":"hypomagnesemia",
+  "hypocalcaemia":"hypocalcemia","hypercalcaemia":"hypercalcemia",
+  "metabolic acidosis":"acidosis","lactic acidosis":"acidosis","raised lactate":"acidosis",
+  "septic":"sepsis","urosepsis":"sepsis","bacteraemia":"sepsis","bacteremia":"sepsis",
+  "e coli":"escherichia coli","e. coli":"escherichia coli","ecoli":"escherichia coli",
+  "septic shock":"septic shock","severe sepsis":"severe sepsis",
+  "resp failure":"respiratory failure",
+  "hypoxic":"hypoxia","hypoxaemia":"hypoxia","hypoxemia":"hypoxia","hypercapnic":"hypercapnia","hypercarbia":"hypercapnia",
+  "ards":"acute respiratory distress syndrome","vap":"ventilator associated pneumonia",
+  "intubated":"dependence on ventilator","intubation":"dependence on ventilator","mechanical ventilation":"dependence on ventilator",
+  "ventilated":"dependence on ventilator","on ventilator":"dependence on ventilator","cap":"pneumonia","hap":"pneumonia",
+  "copd exacerbation":"copd with acute exacerbation","aecopd":"copd with acute exacerbation",
+  "cardiogenic":"cardiogenic shock","hypovolaemic":"hypovolemic","distributive shock":"shock",
+  "cardiac arrest":"cardiac arrest","rosc":"cardiac arrest",
+  "chf":"heart failure","ccf":"heart failure",
+  "hfref":"acute systolic","hfpef":"acute diastolic","adhf":"acute on chronic systolic heart failure",
+  "nstemi":"non-st elevation","stemi":"st elevation","ami":"myocardial infarction",
+  "acs":"acute ischemic heart disease","usa":"unstable angina",
+  "demand ischaemia":"demand ischemia","type 2 mi":"myocardial infarction type 2",
+  "af":"atrial fibrillation","afib":"atrial fibrillation","a fib":"atrial fibrillation",
+  "paf":"paroxysmal atrial fibrillation","vt":"ventricular tachycardia","vf":"ventricular fibrillation",
+  "svt":"supraventricular tachycardia","chb":"atrioventricular block","complete heart block":"atrioventricular block",
+  "sss":"sick sinus syndrome","brady":"bradycardia","pe":"pulmonary embolism",
+  "aortic dissection":"dissection of thoracic aorta","tamponade":"cardiac tamponade",
+  "htn emergency":"hypertensive emergency","hypertensive crisis":"hypertensive emergency","malignant hypertension":"hypertensive emergency",
+  "thrombocytopaenia":"thrombocytopenia","low platelets":"thrombocytopenia","neutropenic":"neutropenia",
+  "febrile neutropenia":"febrile neutropenia","pancytopaenia":"pancytopenia",
+  "anaemia":"anemia","dic":"disseminated intravascular coagulation","coagulopathy":"coagulation defect",
+  "ttp":"thrombotic thrombocytopenic purpura","hus":"thrombotic microangiopathy","tma":"thrombotic microangiopathy",
+  "hit":"heparin induced thrombocytopenia","tls":"tumor lysis syndrome","tumour lysis":"tumor lysis syndrome",
+  "crs":"cytokine release syndrome","icans":"toxic encephalopathy","car-t":"toxic encephalopathy",
+  "svc syndrome":"compression of vein","cord compression":"cord compression",
+  "leukaemia":"leukemia","metastasis":"secondary malignant neoplasm",
+  "metastases":"secondary malignant neoplasm","mets":"secondary malignant neoplasm","chemo":"antineoplastic chemotherapy",
+  "chemotherapy":"antineoplastic chemotherapy","alf":"acute hepatic failure","acute liver failure":"acute hepatic failure",
+  "aclf":"chronic hepatic failure","hrs":"hepatorenal syndrome",
+  "decompensated liver":"cirrhosis","portal htn":"portal hypertension",
+  "variceal bleed":"esophageal varices with bleeding","varices":"esophageal varices",
+  "he":"hepatic encephalopathy","sbp":"spontaneous bacterial peritonitis",
+  "gi bleed":"gastrointestinal hemorrhage","git bleed":"gastrointestinal hemorrhage","ugib":"gastrointestinal hemorrhage",
+  "lgib":"lower gi bleed","haematemesis":"hematemesis","malaena":"melena","melaena":"melena",
+  "pud":"ulcer with hemorrhage","sap":"acute pancreatitis",
+  "bowel obstruction":"intestinal obstruction","sbo":"intestinal obstruction",
+  "mesenteric ischaemia":"ischemia of intestine","mesenteric ischemia":"ischemia of intestine",
+  "c diff":"clostridium difficile",
+  "cdiff":"clostridium difficile","c. difficile":"clostridium difficile",
+  "dka":"ketoacidosis","hhs":"hyperosmolarity","hyperosmolar":"hyperosmolarity","hyperglycaemia":"hyperglycemia",
+  "hypoglycaemia":"hypoglycemia","t2dm":"type 2 dm","t1dm":"type 1 dm",
+  "dm2":"type 2 dm","dm1":"type 1 dm","myxoedema":"myxedema",
+  "addisonian":"addisonian crisis","hypothyroid":"hypothyroidism",
+  "siadh":"inappropriate adh","di":"diabetes insipidus",
+  "cva":"cerebral infarction","ischaemic stroke":"cerebral infarction","ischemic stroke":"cerebral infarction",
+  "stroke":"cerebral infarction","ich":"intracerebral hemorrhage","intracranial haemorrhage":"intracerebral hemorrhage",
+  "sah":"subarachnoid hemorrhage","sdh":"subdural hemorrhage","tia":"transient cerebral ischemic attack",
+  "seizure":"convulsions","seizures":"convulsions","fits":"convulsions",
+  "cerebral oedema":"cerebral edema",
+  "gbs":"guillain-barre","guillain barre":"guillain-barre","myasthenic crisis":"myasthenia gravis",
+  "pres":"posterior reversible encephalopathy",
+  "diabetic":"diabetes",
+  /* --- expanded ICU set --- */
+  "covid":"covid-19","coronavirus":"covid-19","sars-cov-2":"covid-19","sars cov 2":"covid-19",
+  "influenza":"influenza","flu":"influenza",
+  "uti":"urinary tract infection","urinary infection":"urinary tract infection",
+  "pyelo":"pyelonephritis","pyelonephritis":"pyelonephritis",
+  "cauti":"indwelling urinary catheter","clabsi":"central venous catheter","crbsi":"central venous catheter",
+  "line infection":"central venous catheter",
+  "ie":"infective endocarditis","endocarditis":"infective endocarditis",
+  "nec fasc":"necrotizing fasciitis","necrotising fasciitis":"necrotizing fasciitis",
+  "osteomyelitis":"osteomyelitis","cellulitis":"cellulitis","cholecystitis":"cholecystitis",
+  "candidaemia":"candidal sepsis","candidemia":"candidal sepsis","fungaemia":"mycosis","fungemia":"mycosis",
+  "gram neg":"gram-negative","gram negative":"gram-negative",
+  "aspiration":"inhalation","aspiration pneumonia":"inhalation",
+  "pulmonary oedema":"pulmonary edema","flash pulmonary edema":"pulmonary edema","oedema":"edema",
+  "pleural effusion":"pleural effusion","effusion":"effusion",
+  "ptx":"pneumothorax","pneumothoraces":"pneumothorax","pneumothorax":"pneumothorax",
+  "haemoptysis":"hemoptysis","atelectasis":"atelectasis",
+  "asthma":"asthma","status asthmaticus":"status asthmaticus",
+  "pulmonary htn":"pulmonary hypertension","pah":"pulmonary hypertension","phtn":"pulmonary hypertension",
+  "dcm":"dilated cardiomyopathy","cardiomyopathy":"cardiomyopathy","takotsubo":"takotsubo",
+  "cor pulmonale":"cor pulmonale","aortic stenosis":"aortic","mitral regurgitation":"mitral",
+  "hypotension":"hypotension","hypotensive":"hypotension",
+  "dvt":"deep veins","deep vein thrombosis":"deep veins","vte":"embolism","septic pe":"septic pulmonary embolism",
+  "anaphylaxis":"anaphylactic shock","anaphylactic":"anaphylactic shock",
+  "delirium":"delirium","ams":"altered mental status","altered mentation":"altered mental status",
+  "encephalopathic":"encephalopathy","anoxic brain injury":"anoxic brain","hie":"anoxic brain",
+  "nms":"neuroleptic","wernicke":"wernicke",
+  "dts":"withdrawal delirium","delirium tremens":"withdrawal delirium",
+  "alcohol withdrawal":"withdrawal","etoh withdrawal":"withdrawal",
+  "cvst":"intracranial venous","cerebral venous thrombosis":"intracranial venous",
+  "tbi":"traumatic brain injury","edh":"epidural hemorrhage","extradural":"epidural hemorrhage",
+  "overdose":"poisoning","tox ingestion":"poisoning",
+  "paracetamol":"aminophenol","acetaminophen":"aminophenol","tylenol":"aminophenol","apap":"aminophenol",
+  "salicylate":"aspirin","asa overdose":"aspirin",
+  "opioid":"opioids","heroin":"opioids","fentanyl":"opioids","morphine overdose":"opioids",
+  "benzo":"benzodiazepines","benzodiazepine":"benzodiazepines",
+  "cocaine":"cocaine","co poisoning":"carbon monoxide","carbon monoxide":"carbon monoxide",
+  "alcohol poisoning":"ethanol","ethanol":"ethanol",
+  "rhabdo":"rhabdomyolysis","rhabdomyolysis":"rhabdomyolysis",
+  "fluid overload":"fluid overload","volume overload":"fluid overload","hypervolaemia":"fluid overload","hypervolemia":"fluid overload",
+  "taco":"transfusion associated circulatory overload",
+  "hyperphosphataemia":"phosphorus","hyperphosphatemia":"phosphorus","hypophosphataemia":"phosphorus","hypophosphatemia":"phosphorus",
+  "hyperuricaemia":"hyperuricemia",
+  "malnutrition":"malnutrition","malnourished":"malnutrition","cachexia":"malnutrition",
+  "hydronephrosis":"hydronephrosis","renal stone":"calculus kidney","kidney stone":"calculus kidney",
+  "transplant rejection":"transplant rejection",
+  "perforation":"perforation","perforated bowel":"perforation intestine",
+  "toxic megacolon":"toxic megacolon","peritoneal abscess":"peritoneal abscess",
+  "sickle":"sickle cell","sickle cell crisis":"sickle cell","vaso-occlusive":"sickle cell","voc":"sickle cell",
+  "hlh":"hemophagocytic","haemolytic":"hemolytic","hemolysis":"hemolytic",
+  "preeclampsia":"pre eclampsia","pre eclampsia":"pre eclampsia","eclampsia":"eclampsia",
+  "hellp":"hellp","ppcm":"peripartum cardiomyopathy","afe":"amniotic fluid embolism",
+  "pph":"postpartum hemorrhage","postpartum haemorrhage":"postpartum hemorrhage",
+  "dnr":"do not resuscitate","dnar":"do not resuscitate","comfort care":"palliative","palliative":"palliative",
+  "trache":"tracheostomy","trach":"tracheostomy","tracheostomy":"tracheostomy",
+  "peg":"gastrostomy","g tube":"gastrostomy","gastrostomy":"gastrostomy",
+  "pacemaker":"pacemaker","ppm":"pacemaker","aicd":"defibrillator",
+  "hypothermia":"hypothermia","hypothermic":"hypothermia",
+  "syncope":"syncope","dyspnea":"dyspnea","dyspnoea":"dyspnea","sob":"dyspnea","shortness of breath":"dyspnea",
+  "tachycardia":"tachycardia","tachycardic":"tachycardia",
+  "oliguria":"oliguria","oliguric":"oliguria","anuria":"anuria","anuric":"anuria",
+  "haematuria":"hematuria","pyrexia":"fever","febrile":"fever",
+};
+
+/* Negation cues */
+const NEG_CUES = ["no","not","without","w/o","denies","denied","negative","absent","absence",
+  "never","none","ruled","resolved","unremarkable","nil","free"];
+
+const STOP = new Set(("a an and or of the with without to in on for due unspecified other "+
+  "acute chronic classified elsewhere encounter presence disorder stage type mellitus "+
+  "unspec initial time").split(" "));
+
+/* Generic modifiers — never used as standalone match keys (avoids false positives
+   e.g. "(severe)" firing on unrelated text) */
+const GENERIC = new Set(("severe mild moderate crisis malignant congestive reversible "+
+  "uninfected complete generalized acquired congenital nonspecific grade following forms "+
+  "site extent partial").split(" "));
+
+/* Context words that must NEVER be standalone single-word match keys
+   (e.g. "troponin negative" must not help fire "gram-negative sepsis").
+   Multiword keys like "gram negative" are unaffected. */
+const NOKEY = new Set(["negative","positive"]);
+
+/* ═══════════════════════════════════════════════════════════════════
+   3. BUILD SEARCH INDEX  (per code -> weighted keys)
+   ═══════════════════════════════════════════════════════════════════ */
+function buildIndex(){
+  return SEED.map(([code,desc,cat])=>{
+    const keys=[];
+    // parentheticals: keep ACRONYMS (weight 4) and multiword phrases (2.5);
+    // drop generic single words like (severe)/(mild) that cause false positives.
+    (desc.match(/\(([^)]+)\)/g)||[]).forEach(p=>{
+      p.replace(/[()]/g,"").split(/[\/,]| or | e\.g\.? /).forEach(aOrig=>{
+        const a=aOrig.trim().toLowerCase().replace(/\./g,"");
+        if(!a || a.length<2 || a.startsWith("eg")) return;
+        const isAcro=/[A-Z]{2,}/.test(aOrig.trim());
+        if(isAcro) keys.push({t:a,w:4});
+        else if(a.split(" ").length>=2) keys.push({t:a,w:2.5});
+        else if(!GENERIC.has(a) && !STOP.has(a) && a.length>=4) keys.push({t:a,w:2}); // drug names, candidemia, etc.
+      });
+    });
+    const main=desc.toLowerCase().replace(/\([^)]*\)/g,"").replace(/[^a-z0-9 ]/g," ").replace(/\s+/g," ").trim();
+    const toks=main.split(" ").filter(w=>w.length>=3 && !STOP.has(w) && !GENERIC.has(w));
+    // single-word diagnosis (e.g. "Hyperkalemia", "Melena") -> strong whole key
+    if(toks.length===1) keys.push({t:toks[0],w:3});
+    for(let i=0;i<toks.length-1;i++) keys.push({t:toks[i]+" "+toks[i+1],w:2.5});
+    toks.forEach(w=>{ if(!NOKEY.has(w)) keys.push({t:w,w:1}); });
+    const m={}; keys.forEach(k=>{ if(!m[k.t]||m[k.t]<k.w) m[k.t]=k.w; });
+    const maxScore=Object.values(m).reduce((a,b)=>a+b,0);
+    return {code,desc,cat,keys:Object.entries(m).map(([t,w])=>({t,w})),maxScore};
+  });
+}
+const INDEX=buildIndex();
+
+/* ═══════════════════════════════════════════════════════════════════
+   4. MATCHER
+   ═══════════════════════════════════════════════════════════════════ */
+function normalize(s){ return " "+s.toLowerCase().replace(/[^a-z0-9 ]/g," ").replace(/\s+/g," ").trim()+" "; }
+function segment(raw){
+  return raw.toLowerCase()
+    .replace(/\b(but|however|although|though)\b/g,".")
+    .split(/[.;:\n]|,/)
+    .map(s=>s.trim()).filter(Boolean);
+}
+function esc4re(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
+function segIsNegated(seg,keyAnchor){
+  const idx=seg.indexOf(keyAnchor);
+  if(idx<0) return false;
+  const before=" "+seg.slice(0,idx)+" ";
+  return NEG_CUES.some(c=>new RegExp("\\b"+esc4re(c)+"\\b").test(before));
+}
+function hasPhrase(hay,phrase){
+  return new RegExp("(^|[^a-z0-9])"+esc4re(phrase)+"([^a-z0-9]|$)").test(hay);
+}
+/* Family de-duplication: when a note names a graded/typed diagnosis, collapse the
+   whole ICD family to the single documented variant instead of listing every stage.
+   Only triggers when the family concept is actually named in the text. */
+const FAMILY_REFINE = [
+  { fam:"N18.", phrase:/chronic kidney disease|\bckd\b/, rules:[
+      [/\besrd\b|\beskd\b|end[- ]stage renal/,"N18.6"],
+      [/stage\s*3\s*a\b/,"N18.31"],
+      [/stage\s*3\s*b\b/,"N18.32"],
+      [/stage\s*3\b/,"N18.30"],
+      [/stage\s*2\b/,"N18.2"],
+      [/stage\s*1\b/,"N18.1"],
+      [/stage\s*4\b/,"N18.4"],
+      [/stage\s*5\b/,"N18.5"],
+    ], fallback:"N18.9" },
+  { fam:"I50.", phrase:/heart failure|\bchf\b|\bccf\b|\bhfref\b|\bhfpef\b|\badhf\b/, rules:[
+      [/combined|systolic and diastolic|mixed systolic/,"I50.41"],
+      [/right[ -](?:heart|ventric\w*|sided)\w* fail|\brv failure\b/,"I50.814"],
+      [/(?:acute[ -]on[ -]chronic|acute on chronic|decompensat\w*)[\s\S]*?(?:systolic|hfref|reduced ejection|reduced ef)|(?:systolic|hfref)[\s\S]*?(?:acute[ -]on[ -]chronic|acute on chronic|decompensat\w*)/,"I50.23"],
+      [/(?:acute[ -]on[ -]chronic|acute on chronic|decompensat\w*)[\s\S]*?(?:diastolic|hfpef|preserved ejection|preserved ef)|(?:diastolic|hfpef)[\s\S]*?(?:acute[ -]on[ -]chronic|acute on chronic|decompensat\w*)/,"I50.33"],
+      [/\badhf\b/,"I50.23"],
+      [/systolic|hfref|reduced ejection fraction|reduced ef\b/,"I50.21"],
+      [/diastolic|hfpef|preserved ejection fraction|preserved ef\b/,"I50.31"],
+    ], fallback:"I50.9" },
+  { fam:"I48.", phrase:/atrial fibrillation|\bafib\b|\baf\b|\ba fib\b/, rules:[
+      [/paroxysmal/,"I48.0"],
+      [/permanent|chronic/,"I48.21"],
+    ], fallback:"I48.91" },
+  { fam:"I26.", phrase:/pulmonary embolism|\bpe\b/, rules:[
+      [/septic/,"I26.90"],
+      [/cor pulmonale|acute cor|rv strain|right ventric\w* strain|right heart strain/,"I26.09"],
+    ], fallback:"I26.99" },
+  { fam:"J96.", phrase:/respiratory failure/, rules:[
+      [/acute[ -](?:and|&|on)[ -]chronic|acute on chronic/,"J96.20"],
+      [/\bchronic\b/,"J96.10"],
+      [/hypercap|hypercarb/,"J96.02"],
+      [/hypox/,"J96.01"],
+      [/\bacute\b/,"J96.00"],
+    ], fallback:"J96.90" },
+];
+function refineFamilies(list,textLower){
+  FAMILY_REFINE.forEach(f=>{
+    const fam=list.filter(r=>r.code.startsWith(f.fam));
+    if(fam.length<2) return;                 // one or none: nothing to collapse
+    if(!f.phrase.test(textLower)) return;    // family concept not actually named
+    let target=f.fallback;
+    for(const [re,code] of f.rules){ if(re.test(textLower)){ target=code; break; } }
+    const ref=fam[0];                        // highest-scoring member (list pre-sorted)
+    for(let i=list.length-1;i>=0;i--){
+      if(list[i].code.startsWith(f.fam) && list[i].code!==target) list.splice(i,1);
+    }
+    if(!list.some(r=>r.code===target)){
+      const e=INDEX.find(x=>x.code===target);
+      if(e) list.push({...e,score:ref.score,conf:ref.conf,ev:ref.ev,negated:ref.negated});
+    }
+  });
+  return list;
+}
+function match(raw){
+  if(!raw.trim()) return {hits:[],negated:[]};
+  let hay=normalize(raw), expanded=hay;
+  Object.entries(SYN).forEach(([alias,canon])=>{ if(hasPhrase(hay,alias)) expanded+=" "+canon+" "; });
+  const segs=segment(raw);
+  const segExp=segs.map(s=>{
+    let e=" "+s+" ";
+    Object.entries(SYN).forEach(([alias,canon])=>{ if(hasPhrase(" "+s+" ",alias)) e+=" "+canon+" "; });
+    return e;
+  });
+  const results=[];
+  INDEX.forEach(entry=>{
+    let score=0; const ev=new Set();
+    entry.keys.forEach(k=>{ if(hasPhrase(expanded,k.t)){ score+=k.w; ev.add(k.t); } });
+    if(score<2) return;
+    const anchor=[...ev].sort((a,b)=>b.length-a.length)[0];
+    let negated=false, seenPositive=false, negClause="";
+    segExp.forEach((se,si)=>{
+      if(hasPhrase(se,anchor)){
+        /* negClause is display-only — it records which clause held the code back,
+           and has no effect on matching or negation logic. */
+        if(segIsNegated(se,anchor)){ negated=true; if(!negClause) negClause=segs[si]; }
+        else seenPositive=true;
+      }
+    });
+    if(!seenPositive && !negated) seenPositive=true;
+    const conf=Math.min(100,Math.round(100*score/Math.max(entry.maxScore,4)));
+    results.push({...entry,score,conf,ev:[...ev],negClause,negated:negated&&!seenPositive});
+  });
+  const byCode={};
+  results.forEach(r=>{ if(!byCode[r.code]||byCode[r.code].score<r.score) byCode[r.code]=r; });
+  const all=Object.values(byCode).sort((a,b)=>b.score-a.score||a.code.localeCompare(b.code));
+  const textLower=" "+raw.toLowerCase().replace(/\s+/g," ").trim()+" ";
+  let hits=refineFamilies(all.filter(r=>!r.negated),textLower);
+  let negated=refineFamilies(all.filter(r=>r.negated),textLower);
+  hits.sort((a,b)=>b.score-a.score||a.code.localeCompare(b.code));
+  return { hits, negated };
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   5. CODER UI
+   ═══════════════════════════════════════════════════════════════════ */
+const $=id=>document.getElementById(id);
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* ═══════════════════════════════════════════════════════════════════
+   5b. THREE-PANE INPUT · SOI/ROM ESTIMATE · SUMMARY  (all offline)
+   ═══════════════════════════════════════════════════════════════════ */
+function val(id){ const e=$(id); return e?e.value:""; }
+function combinedText(){ return ["inHx","inSenior","inExtra"].map(val).filter(t=>t.trim()).join(".\n"); }
+
+/* Transparent acuity heuristic — NOT the proprietary 3M APR-DRG grouper.
+   Each code -> {soi,rom} on a 1-4 (Minor/Moderate/Major/Extreme) scale by
+   keyword. Tune the regexes below to adjust weighting. */
+const SUBCLASS=["","Minor","Moderate","Major","Extreme"];
+const ROM_BAND=["","0–2%","2–10%","10–30%","30–70%+"];
+function acuity(code,desc){
+  const d=(desc||"").toLowerCase(); let rom=1,soi=1;
+  if(/cardiac arrest|septic shock|ards|acute respiratory distress|disseminated intravascular|hepatic failure|hepatorenal|intracerebral hemorrhage|subarachnoid hemorrhage|status epilepticus|cardiac tamponade|dissection of thoracic aorta|amniotic fluid embolism|eclampsia|hellp|anaphylactic shock|toxic megacolon|necrotizing fasciitis|ventricular fibrillation|ventricular flutter|meningococc|coma|cerebral edema|tumor lysis|cytokine release|hemophagocytic|myxedema|thyroid storm|adrenal crisis|addisonian|infected necrosis|combined systolic and diastolic/.test(d)){rom=4;soi=4;}
+  else if(/shock|severe sepsis|respiratory failure|acute kidney|acute pancreatitis|myocardial infarction|non-st elevation|st elevation|acute systolic|acute diastolic|acute on chronic|acute combined|pulmonary embolism|cerebral infarction|nontraumatic|encephalopathy|hyperkalemia|acid-base|acidosis|gastrointestinal hemorrhage|esophageal varices|variceal|rhabdomyolysis|dependence on ventilator|status asthmaticus|hyperosmolarity|ketoacidosis|thrombotic thrombocytopenic|thrombotic microangiopathy|agranulocytosis|febrile neutropenia|generalized \(acute\) peritonitis|cholangitis|ischemia of intestine|perforation of intestine|compression|pre-eclampsia|postpartum hemorrhage|sickle cell disease with crisis|acute hepatic|guillain|myasthenia gravis with/.test(d)){rom=3;soi=3;}
+  else if(/sepsis|bacteremia|candidal|failure|infection|pneumonia|hemorrhage|embolism|thrombosis|fibrillation|flutter|tachycardia|bradycardia|hypokalemia|hyponatremia|hypernatremia|hypocalcemia|hypercalcemia|hypomagnesemia|delirium|convulsions|seizure|epilepsy|pancreatitis|cellulitis|pyelonephritis|endocarditis|obstruction|ileus|anemia|coagulation|thrombocytopenia|neutropenia|hypertensive emergency|malnutrition|dehydration|hypovolemia|volume depletion|fluid overload|copd|asthma|effusion|pneumothorax|pulmonary edema|hydronephrosis|cirrhosis|ascites|hepatitis|withdrawal|hypoglycemia|hyperglycemia|myocarditis|pericarditis/.test(d)){rom=2;soi=2;}
+  if(/^Z/.test(code) && !/dependence on ventilator/.test(d)){rom=1;soi=Math.min(soi,2);}
+  if(/chronic kidney disease, stage [123]|paroxysmal atrial|permanent atrial|hypothyroidism, unspecified|long-term|presence of|do not resuscitate|palliative|tracheostomy status|gastrostomy status|transplant status/.test(d)){rom=Math.min(rom,1);soi=Math.min(soi,2);}
+  return {soi,rom};
+}
+function estimateRisk(codes){
+  if(!codes||!codes.length) return null;
+  const items=codes.map(c=>({...c,...acuity(c.code,c.desc)}));
+  let soi=Math.max(...items.map(i=>i.soi)), rom=Math.max(...items.map(i=>i.rom));
+  const majRom=items.filter(i=>i.rom>=3).length, majSoi=items.filter(i=>i.soi>=3).length;
+  if(majRom>=2 && rom<4) rom++;                 // multiple significant comorbidities escalate
+  if(majSoi>=2 && soi<4) soi++;
+  const systems=new Set(items.map(i=>(i.cat||"").split(" · ")[0])).size;
+  if(systems>=3 && majRom>=1 && rom<4) rom++;   // multi-system involvement
+  soi=Math.min(4,soi); rom=Math.min(4,rom);
+  return {soi,rom,systems,n:items.length};
+}
+function updateRisk(){
+  const bar=$("riskBar"); if(!bar) return;
+  const r=estimateRisk(selected());
+  if(!r){ bar.classList.add("hidden"); bar.innerHTML=""; return; }
+  bar.classList.remove("hidden");
+  const scale=lv=>`<span class="rk-scale">${[1,2,3,4].map(n=>`<i class="${n<=lv?"on":""}"></i>`).join("")}</span>`;
+  bar.innerHTML=`
+    <div class="rk-head">Acuity estimate</div>
+    <div class="riskbar-row">
+      <div class="riskcell lv${r.soi}"><span class="rk-label">Severity of illness</span><span class="rk-val soi${r.soi}">${r.soi} · ${SUBCLASS[r.soi]}</span>${scale(r.soi)}</div>
+      <div class="riskcell lv${r.rom}"><span class="rk-label">Risk of mortality</span><span class="rk-val rom${r.rom}">${r.rom} · ${SUBCLASS[r.rom]}</span>${scale(r.rom)}</div>
+      <div class="riskcell lv${r.rom}"><span class="rk-label">Illustrative in-hospital mortality</span><span class="rk-val mort">${ROM_BAND[r.rom]}</span></div>
+    </div>
+    <div class="rk-note">Educational heuristic from ${r.n} selected code${r.n!==1?"s":""} across ${r.systems} body system${r.systems!==1?"s":""}. NOT the validated 3M APR-DRG SOI/ROM and NOT case-mix adjusted — do not use for clinical decisions, prognostication, benchmarking, or billing.</div>`;
+}
+
+/* Deterministic, offline structured summary (no AI / no network) capped at 500 words */
+function capWords(str,n){ const w=str.trim().split(/\s+/); return w.length<=n?str.trim():w.slice(0,n).join(" ")+"…"; }
+function buildSummary(){
+  const clean=t=>t.replace(/\s+/g," ").trim();
+  const hx=clean(val("inHx")), sr=clean(val("inSenior")), ex=clean(val("inExtra"));
+  let sel=selected();
+  if(!sel.length){ sel=match(combinedText()).hits.map(h=>({code:h.code,desc:h.desc,cat:h.cat})); }
+  const risk=estimateRisk(sel);
+  const tail=[];
+  if(sel.length) tail.push("Active problems (ICD-10): "+sel.map(s=>`${s.desc} (${s.code})`).join("; ")+".");
+  if(risk) tail.push(`Acuity estimate (educational, non-validated): SOI ${risk.soi} (${SUBCLASS[risk.soi]}), ROM ${risk.rom} (${SUBCLASS[risk.rom]}); illustrative predicted in-hospital mortality ${ROM_BAND[risk.rom]}.`);
+  const tailText=tail.join("\n\n");
+  const tailWords=tailText?tailText.split(/\s+/).length:0;
+  let budget=500 - tailWords - 3; if(budget<40) budget=40;
+  const narr=[];
+  if(sr) narr.push("Senior review: "+sr);
+  if(hx) narr.push("History of presenting illness: "+hx);
+  if(ex) narr.push("Additional information: "+ex);
+  let narrText=capWords(narr.join("\n\n"),budget);
+  let text=["CLINICAL SUMMARY",narrText,tailText].filter(Boolean).join("\n\n");
+  text=capWords(text,500);
+  return {text, words:text.trim().split(/\s+/).length};
+}
+function generateSummary(){
+  if(!combinedText().trim()){ toast("Enter some notes first"); return; }
+  const {text,words}=buildSummary();
+  $("summaryBox").classList.remove("hidden");
+  $("summaryText").value=text;
+  $("wordCount").textContent=words+" / 500 words";
+  const ta=$("summaryText"); ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight+4,600)+"px";
+}
+function copySummary(){
+  const t=$("summaryText").value; if(!t){ toast("Nothing to copy"); return; }
+  navigator.clipboard.writeText(t).then(()=>toast("Summary copied"))
+    .catch(()=>{$("summaryText").select();document.execCommand("copy");toast("Summary copied");});
+}
+$("summaryBtn").onclick=generateSummary;
+$("copySummaryBtn").onclick=copySummary;
+
+function generate(){
+  const raw=combinedText();
+  $("riskBar").classList.add("hidden");
+  const {hits,negated}=match(raw);
+  const box=$("results");
+  if(!raw.trim()){ box.innerHTML=`<div class="empty">Paste a clinical summary above, then press <strong>Generate</strong>.</div>`; $("matchStat").textContent=""; return; }
+  if(!hits.length && !negated.length){ box.innerHTML=`<div class="empty">No codes matched. Try adding more clinical detail, or search the Reference list.</div>`; $("matchStat").textContent="0 matches"; return; }
+  /* One continuous certainty scale: rows descend by confidence, and the
+     rules mark where suggested becomes possible, and possible becomes negated. */
+  const byConf=[...hits].sort((a,b)=>b.conf-a.conf||a.code.localeCompare(b.code));
+  const strong=byConf.filter(h=>h.conf>=45);
+  const maybe=byConf.filter(h=>h.conf<45);
+  const total=strong.length+maybe.length+negated.length;
+  const drawDelay=total*18+120;   // rules draw once every row has landed
+  let i=0;
+  const rowHtml=(r,checked,tier)=>`
+    <label class="res ${tier}" style="--tick:${r.conf};--i:${i++}">
+      <span class="gutter">${tier==="neg"?"":"<i></i>"}</span>
+      <div class="res-main">
+        <span class="res-code">${esc(r.code)}</span><span class="res-desc">${esc(r.desc)}</span>
+        <div class="res-sub">
+          <span class="res-meta">${esc(r.cat)}</span>
+          <span class="ev">${[...r.ev].sort((a,b)=>b.length-a.length).slice(0,4).map(esc).join(" · ")}</span>
+        </div>
+        ${tier==="neg"&&r.negClause?`<div class="neg-clause">&ldquo;${esc(r.negClause)}&rdquo;</div>`:""}
+      </div>
+      <span class="cb"><input type="checkbox" data-code="${esc(r.code)}" data-desc="${esc(r.desc)}" data-cat="${esc(r.cat)}" ${checked?"checked":""}><i class="box"></i></span>
+    </label>`;
+  const rule=label=>`<div class="thresh"><i class="pre" style="--d:${drawDelay}ms"></i><b>${label}</b><i style="--d:${drawDelay}ms"></i></div>`;
+  let html=`<div class="certainty">`;
+  if(strong.length) html+=rule(`Suggested &middot; ${strong.length}`)+strong.map(r=>rowHtml(r,true,"t1")).join("");
+  if(maybe.length) html+=rule(`Below threshold &mdash; possible &middot; ${maybe.length}`)+maybe.map(r=>rowHtml(r,false,"t2")).join("");
+  if(negated.length) html+=rule(`Negated &mdash; not selected &middot; ${negated.length}`)+negated.map(r=>rowHtml(r,false,"neg")).join("");
+  html+=`</div>`;
+  html+=`
+    <div class="toolbar" style="margin-top:18px">
+      <button class="btn btn-primary" id="copyBtn">Copy selected</button>
+      <button class="btn" id="csvBtn">Download CSV</button>
+      <button class="btn btn-ghost" id="allBtn">Select all</button>
+      <button class="btn btn-ghost" id="noneBtn">Clear selection</button>
+    </div>
+    <div class="output-box hidden" id="outBox"><textarea id="outText" readonly></textarea></div>`;
+  box.innerHTML=html;
+  $("matchStat").textContent=`${hits.length} match${hits.length!==1?"es":""}${negated.length?` · ${negated.length} negated`:""}`;
+  $("copyBtn").onclick=copySelected;
+  $("csvBtn").onclick=downloadCSV;
+  $("allBtn").onclick=()=>{box.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=true);updateRisk();};
+  $("noneBtn").onclick=()=>{box.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=false);updateRisk();};
+  box.querySelectorAll('input[type=checkbox]').forEach(c=>c.addEventListener('change',updateRisk));
+  updateRisk();
+}
+function selected(){
+  return [...document.querySelectorAll('#results input[type=checkbox]:checked')]
+    .map(c=>({code:c.dataset.code,desc:c.dataset.desc,cat:c.dataset.cat}));
+}
+function copySelected(){
+  const sel=selected(); if(!sel.length){ toast("Nothing selected"); return; }
+  const text=sel.map(s=>`${s.code} — ${s.desc}`).join("\n");
+  $("outBox").classList.remove("hidden"); $("outText").value=text;
+  navigator.clipboard.writeText(text).then(()=>toast(`Copied ${sel.length} codes`))
+    .catch(()=>{$("outText").select();document.execCommand("copy");toast(`Copied ${sel.length} codes`);});
+}
+function downloadCSV(){
+  const sel=selected(); if(!sel.length){ toast("Nothing selected"); return; }
+  const csv="ICD-10 Code,Description\n"+sel.map(s=>`"${s.code}","${s.desc.replace(/"/g,'""')}"`).join("\n");
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download="icd10-problem-list.csv"; a.click(); toast(`Exported ${sel.length} codes`);
+}
+$("genBtn").onclick=generate;
+$("clearBtn").onclick=()=>{["inHx","inSenior","inExtra"].forEach(id=>$(id).value="");$("results").innerHTML=initEmpty();$("matchStat").textContent="";$("riskBar").classList.add("hidden");$("summaryBox").classList.add("hidden");$("inHx").focus();};
+["inHx","inSenior","inExtra"].forEach(id=>$(id).addEventListener("keydown",e=>{ if((e.metaKey||e.ctrlKey)&&e.key==="Enter") generate(); }));
+
+/* ═══════════════════════════════════════════════════════════════════
+   6. REFERENCE TAB
+   ═══════════════════════════════════════════════════════════════════ */
+let activeFilter="All";
+const refData=(()=>{const m={};SEED.forEach(([code,desc,cat])=>{if(!m[code])m[code]={code,desc,cat};});return Object.values(m);})();
+function categories(){return ["All",...[...new Set(refData.map(d=>d.cat))].sort()];}
+function hl(text,q){ if(!q)return esc(text); const i=text.toLowerCase().indexOf(q.toLowerCase());
+  if(i<0)return esc(text); return esc(text.slice(0,i))+"<mark>"+esc(text.slice(i,i+q.length))+"</mark>"+esc(text.slice(i+q.length)); }
+function renderRef(){
+  const q=$("search").value.trim(), ql=q.toLowerCase();
+  let rows=refData.slice();
+  if(activeFilter!=="All") rows=rows.filter(r=>r.cat===activeFilter);
+  if(ql) rows=rows.filter(r=>r.code.toLowerCase().includes(ql)||r.desc.toLowerCase().includes(ql));
+  rows.sort((a,b)=>a.code.localeCompare(b.code));
+  $("tbody").innerHTML=rows.map(r=>`<tr>
+    <td><span class="code" data-copy="${esc(r.code)}">${hl(r.code,q)}</span></td>
+    <td>${hl(r.desc,q)}<br><span class="cat-tag">${esc(r.cat)}</span></td></tr>`).join("");
+  $("refempty").classList.toggle("hidden",rows.length>0);
+  $("refcount").textContent=`${rows.length} of ${refData.length} codes`+(activeFilter!=="All"?` · ${activeFilter}`:"");
+  const sel=$("groupFilter");
+  if(!sel.options.length){
+    sel.innerHTML=categories().map(c=>`<option value="${esc(c)}">${c==="All"?"All specialty groups":esc(c)}</option>`).join("");
+    sel.onchange=()=>{ activeFilter=sel.value; renderRef(); };
+  }
+  $("tbody").querySelectorAll("[data-copy]").forEach(el=>el.onclick=()=>{
+    navigator.clipboard.writeText(el.dataset.copy).then(()=>toast("Copied "+el.dataset.copy));});
+}
+$("search").addEventListener("input",renderRef);
+
+/* Tabs */
+document.querySelectorAll(".tab").forEach(t=>{
+  const show=()=>{
+    document.querySelectorAll(".tab").forEach(x=>{x.classList.remove("active");x.setAttribute("aria-selected","false");});
+    t.classList.add("active"); t.setAttribute("aria-selected","true");
+    const tab=t.dataset.tab;
+    $("tab-coder").classList.toggle("hidden",tab!=="coder");
+    $("tab-ref").classList.toggle("hidden",tab!=="ref");
+    $("tab-ai").classList.toggle("hidden",tab!=="ai");
+    $("tab-feedback").classList.toggle("hidden",tab!=="feedback");
+    if(tab==="ref") renderRef();
+  };
+  t.onclick=show;
+  t.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); show(); } });
+});
+
+/* Theme — follows the OS until the reader overrides it, then that wins. */
+(function(){
+  const btn=$("themeToggle"), root=document.documentElement;
+  const prefersDark=()=>window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const isDark=()=>root.dataset.theme?root.dataset.theme==="dark":prefersDark();
+  const label=()=>{ const d=isDark(); btn.textContent=d?"Light":"Dark";
+    btn.setAttribute("aria-label",d?"Switch to the light theme":"Switch to the dark theme"); };
+  try{ const saved=localStorage.getItem("icd-theme"); if(saved) root.dataset.theme=saved; }catch(e){}
+  label();
+  btn.onclick=()=>{ const next=isDark()?"light":"dark"; root.dataset.theme=next;
+    try{ localStorage.setItem("icd-theme",next); }catch(e){} label(); };
+})();
+
+/* Feedback form — delivers via Web3Forms (https://web3forms.com).
+   The access key below is tied to kfshcodeproject@gmail.com,
+   which is where submissions arrive. */
+const WEB3FORMS_ACCESS_KEY = "99862810-4e2b-4242-a1dc-2fecf5ce2e1e";
+$("fbForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("fbSend"), status = $("fbStatus");
+  if (WEB3FORMS_ACCESS_KEY === "YOUR_WEB3FORMS_ACCESS_KEY") {
+    status.textContent = "Not configured yet — add your Web3Forms access key.";
+    return;
+  }
+  btn.disabled = true; status.textContent = "Sending…";
+  const payload = {
+    access_key: WEB3FORMS_ACCESS_KEY,
+    email: $("fbEmail").value,
+    subject: $("fbSubject").value,
+    message: $("fbMessage").value,
+    from_name: "ICU ICD-10 Coder feedback"
+  };
+  try {
+    const res = await fetch("https://api.web3forms.com/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.success) {
+      status.textContent = "Thanks — your feedback was sent.";
+      $("fbMessage").value = "";
+      toast("Feedback sent");
+    } else {
+      status.textContent = "Couldn't send: " + (data.message || "please try again.");
+    }
+  } catch (err) {
+    status.textContent = "Network error — please try again.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* Toast + init */
+function toast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");
+  clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("show"),1400);}
+function initEmpty(){return `<div class="empty">Paste a clinical summary above, then press <strong>Generate</strong>.</div>`;}
+$("results").innerHTML=initEmpty();
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     AI SUMMARY  (WebLLM — the model runs in the browser, on-device).
+     Model weights download once from a CDN; the pasted clinical text is
+     processed locally via WebGPU and never leaves the machine.
+     ═══════════════════════════════════════════════════════════════════ -->
+<script type="module">
+import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+
+const g = id => document.getElementById(id);
+let engine = null, loadedModel = null, ready = false, busy = false;
+
+if (!navigator.gpu) {
+  g("ai-unsupported").classList.remove("hidden");
+  g("ai-load").disabled = true;
+  g("ai-model").disabled = true;
+  g("ai-gen").disabled = true;
+}
+
+function setStatus(t){ g("ai-status").textContent = t; }
+function setProg(p){
+  g("ai-progress").classList.remove("hidden");
+  g("ai-progbar").style.width = Math.round(Math.max(0, Math.min(1, p)) * 100) + "%";
+}
+function baseId(id){ return id.replace(/-q4f(16|32)_1-MLC$/, ""); }
+function friendlyLoadError(e){
+  const m = (e && e.message ? e.message : String(e));
+  if (/cachestorage|cache storage|on 'cache/i.test(m)) {
+    return "Load failed — browser storage error. Fix: (1) click the padlock in the address bar \u2192 Site settings \u2192 Delete data, or open DevTools \u2192 Application \u2192 Storage \u2192 Clear site data, then reload. (2) Make sure you are NOT in Incognito/Guest mode. (3) Check you have a few GB of free disk space. Then press Load model again. (" + m + ")";
+  }
+  return "Load failed: " + m;
+}
+function fallbackId(id){ return id.indexOf("q4f16_1") >= 0 ? id.replace("q4f16_1", "q4f32_1") : null; }
+
+/* Suggested ICD-10 codes for the AI summary — produced by the curated, deterministic
+   coder engine (window.match) that also powers the Coder tab, NOT by the language model.
+   This keeps every code grounded in the reviewed SEED list and honours negation. */
+function groundedCodesBlock(text){
+  try {
+    if (typeof window.match !== "function") return "Suggested ICD-10 codes: (coder engine unavailable).";
+    const r = window.match(text);
+    const hits = (r && r.hits) || [];
+    if (!hits.length) return "Suggested ICD-10 codes: no codes matched from the curated critical-care list. Review the note manually or use the Coder tab.";
+    const strong = hits.filter(h => h.conf >= 45);
+    const maybe  = hits.filter(h => h.conf <  45);
+    const line = h => "  " + h.code + " — " + h.desc;
+    const parts = ["Suggested Critical Care ICD-10 Codes (from the coder engine — verify against the institution's current ICD-10-CM master before clinical use)"];
+    (strong.length ? strong : hits).forEach(h => parts.push(line(h)));
+    if (strong.length && maybe.length) {
+      parts.push("");
+      parts.push("Possible — review:");
+      maybe.forEach(h => parts.push(line(h)));
+    }
+    return parts.join("\n");
+  } catch (e) {
+    return "Suggested ICD-10 codes: error running coder engine (" + (e && e.message ? e.message : e) + ").";
+  }
+}
+
+async function loadModel(model){
+  if (!engine) {
+    // Some Chrome/Edge setups throw "Failed to execute 'open' on 'CacheStorage'"
+    // when WebLLM stores model weights via the Cache API. Caching the weights in
+    // IndexedDB instead avoids that failing CacheStorage path.
+    const appConfig = { ...webllm.prebuiltAppConfig, useIndexedDBCache: true };
+    engine = new webllm.MLCEngine({ appConfig });
+    engine.setInitProgressCallback(r => {
+      if (typeof r.progress === "number") setProg(r.progress);
+      if (r.text) setStatus(r.text);
+    });
+  }
+  ready = false;
+  try {
+    await engine.reload(model);
+    loadedModel = model; ready = true;
+  } catch (err) {
+    const fb = fallbackId(model);
+    if (fb) {
+      setStatus("Retrying with a more compatible model build…");
+      await engine.reload(fb);
+      loadedModel = fb; ready = true;
+    } else { throw err; }
+  }
+}
+
+g("ai-load").onclick = async () => {
+  if (busy) return;
+  const model = g("ai-model").value;
+  if (ready && loadedModel && baseId(loadedModel) === baseId(model)) {
+    setStatus("Model already loaded."); g("ai-gen").disabled = false; return;
+  }
+  busy = true; g("ai-load").disabled = true; g("ai-gen").disabled = true;
+  setStatus("Preparing… the first load downloads the model once, then caches it.");
+  try {
+    await loadModel(model);
+    setProg(1);
+    setStatus("Model ready — running locally on this device (" + loadedModel + ").");
+    g("ai-gen").disabled = false;
+  } catch (e) {
+    setStatus(friendlyLoadError(e));
+  } finally {
+    busy = false; g("ai-load").disabled = false;
+  }
+};
+
+g("ai-fromcoder").onclick = () => {
+  const parts = ["inSenior", "inHx", "inExtra"].map(id => { const el = g(id); return el ? el.value.trim() : ""; }).filter(Boolean);
+  if (parts.length) { g("ai-input").value = parts.join("\n\n"); setStatus("Pulled text from the Coder tab."); }
+  else setStatus("The Coder tab is empty.");
+};
+
+g("ai-gen").onclick = async () => {
+  if (busy) return;
+  const text = g("ai-input").value.trim();
+  if (!text) { setStatus("Paste some clinical text to summarize."); return; }
+  busy = true; g("ai-gen").disabled = true;
+  try {
+    if (!ready) { setStatus("Loading the model first (one-time download)…"); await loadModel(g("ai-model").value); setProg(1); setStatus("Model ready — running locally."); }
+    g("ai-out").textContent = "";
+    g("ai-codes").textContent = ""; g("ai-codes").classList.add("hidden");
+    const t0 = performance.now(); g("ai-timer").textContent = "Generating…";
+    const messages = [
+      { role: "system", content: "You are a clinical documentation assistant for adult critical care. You write a faithful, well-organised clinical summary of the note you are given. Use ONLY information explicitly present in the text — never invent diagnoses, findings, medications, laboratory values, or numbers. If something is not stated, leave it out; do not guess. Do NOT output ICD-10 codes — those are generated separately and appended below your summary." },
+      { role: "user", content: "Write a structured clinical summary of the following note as flowing prose in several short paragraphs (not bullet points). Cover, in order and only where the note supports it: (1) the patient's background and reason for admission; (2) the main active problem(s) and their laboratory trajectory, citing the specific numeric values and dates stated in the note; (3) examination findings and current clinical status by system; and (4) the key interventions and ongoing management plan. Stay strictly faithful to the note — do not add anything that is not written in it, and do not include any ICD-10 codes.\n\n" + text }
+    ];
+    const chunks = await engine.chat.completions.create({ messages, temperature: 0.2, max_tokens: 1200, stream: true });
+    let out = "";
+    for await (const c of chunks) {
+      out += (c.choices && c.choices[0] && c.choices[0].delta && c.choices[0].delta.content) || "";
+      g("ai-out").textContent = out;
+    }
+    // Suggested ICD-10 codes, grounded in the curated coder engine (never invented by
+    // the model) — kept in their own block so their provenance stays visually distinct.
+    g("ai-out").textContent = out.trim();
+    g("ai-codes").textContent = groundedCodesBlock(text);
+    g("ai-codes").classList.remove("hidden");
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    g("ai-timer").textContent = "Done in " + secs + "s · verify codes & summary before use";
+  } catch (e) {
+    setStatus("Generation error: " + (e && e.message ? e.message : e));
+    g("ai-timer").textContent = "";
+  } finally {
+    busy = false; g("ai-gen").disabled = false;
+  }
+};
+</script>
+</body>
+</html>
