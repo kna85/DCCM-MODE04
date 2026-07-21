@@ -92,6 +92,24 @@
     padding:8px 11px; }
   #groupFilter { flex:none; max-width:100%; }
   #search { flex:1; min-width:200px; }
+  .addrow { display:flex; align-items:center; gap:10px; margin:14px 0 0; }
+  .addrow .pane-h { margin:0; flex:none; }
+  .addwrap { position:relative; flex:1 1 320px; min-width:0; max-width:520px; }
+  #addDx { width:100%; background:var(--sheet); border:1px solid var(--rule);
+    border-radius:0; color:var(--ink); font-family:var(--serif); font-size:15px;
+    padding:9px 13px; outline:none; line-height:1.55; }
+  #addDx:focus { border-color:var(--pen); box-shadow:inset 0 0 0 1px var(--pen); }
+  #addDx::placeholder { color:var(--ink-3); }
+  .addlist { position:absolute; z-index:20; top:calc(100% - 1px); left:0; right:0;
+    background:var(--sheet); border:1px solid var(--rule);
+    max-height:280px; overflow-y:auto; }
+  .addopt { display:flex; gap:9px; align-items:baseline; padding:8px 12px; cursor:pointer; }
+  .addopt .oc { flex:none; font-family:var(--mono); font-size:13px; font-weight:600; color:var(--ink); }
+  .addopt .od { font-family:var(--serif); font-size:14px; color:var(--ink-2);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .addopt.on { background:var(--pen); }
+  .addopt.on .oc, .addopt.on .od { color:var(--sheet); }
+  .addnone { padding:10px 12px; font-family:var(--mono); font-size:11px; color:var(--ink-3); }
   .toolbar, .controls { display:flex; gap:10px; flex-wrap:wrap;
     align-items:center; margin:14px 0 0; }
   .controls { margin:0 0 12px; }
@@ -146,6 +164,18 @@
   .res.neg .res-desc { font-size:14px; color:var(--ink-3); text-decoration:line-through; }
   .res.neg .res-code { font-size:14px; font-weight:500; color:var(--ink-3); }
 
+  /* Added by hand: full ink, because the user is asserting this code —
+     but no gutter tick, because it was never scored. */
+  .res.man .res-desc { font-size:17px; color:var(--ink); }
+  .res.man .res-code { font-size:15px; font-weight:700; color:var(--ink); }
+  .res-x { flex:none; background:none; border:none; padding:0 2px; margin-top:1px;
+    font-family:var(--util); font-size:17px; line-height:1; color:var(--ink-3);
+    cursor:pointer; transition:color .12s; }
+  .res-x:hover { color:var(--pen); }
+  .res-x:focus-visible { outline:2px solid var(--pen); outline-offset:2px; }
+  .res.flash { animation:flashrow .9s ease-out 1; }
+  @keyframes flashrow { 0%,100% { background:transparent; } 28% { background:var(--sheet); } }
+
   .cb { position:relative; width:16px; height:16px; flex:none; margin-top:4px; }
   .cb input { position:absolute; inset:0; width:100%; height:100%; margin:0;
     opacity:0; cursor:pointer; }
@@ -164,6 +194,11 @@
   .thresh i { flex:1; height:1px; background:var(--rule); transform-origin:left;
     animation:draw .5s ease-out both; animation-delay:var(--d,0ms); }
   .thresh i.pre { flex:none; width:var(--gut); }
+
+  /* Add/remove repaints reuse this renderer; only a fresh Generate animates.
+     :not(.flash) keeps the duplicate-row flash alive on silent repaints. */
+  .certainty.no-anim .res:not(.flash),
+  .certainty.no-anim .thresh i { animation:none; }
 
   @keyframes settle { from { opacity:0; transform:translateY(-3px); } }
   @keyframes draw { from { transform:scaleX(0); } }
@@ -273,6 +308,8 @@
     .cat-tag { display:none; }
     td { padding:9px 8px; }
     .res.t1 .res-desc { font-size:16px; }
+    .addrow { flex-wrap:wrap; }
+    .addwrap { flex:1 1 100%; max-width:none; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -320,6 +357,17 @@
       <button class="btn btn-ghost" id="clearBtn">Clear</button>
       <span class="spacer"></span>
       <span class="hint" id="matchStat"></span>
+    </div>
+
+    <div class="addrow">
+      <label class="pane-h" for="addDx">Add diagnosis</label>
+      <div class="addwrap">
+        <input id="addDx" type="text" autocomplete="off" spellcheck="false"
+               placeholder="Search the reference list by code or diagnosis&hellip;"
+               role="combobox" aria-expanded="false" aria-autocomplete="list"
+               aria-controls="addList">
+        <div class="addlist hidden" id="addList" role="listbox" aria-label="Reference list matches"></div>
+      </div>
     </div>
 
     <div id="results"></div>
@@ -1169,19 +1217,59 @@ function copySummary(){
 $("summaryBtn").onclick=generateSummary;
 $("copySummaryBtn").onclick=copySummary;
 
+/* Hand-added codes. In memory only — no localStorage, no network. They persist
+   across re-Generate; the engine's own rows are rebuilt from scratch each time. */
+let manual=[];
+/* lastResult holds the most recent match() output so that repaints — adding or
+   removing a manual code — never re-score the notes underneath the user. */
+let lastResult=null;
+/* Tick decisions the clinician made deliberately — overriding a negated row
+   through the Add diagnosis box, or carrying a hand-added code's state with it
+   when the engine promotes it onto the scale. These outlive a Generate; an
+   ordinary click on an engine row still resets with the rest, as it always has. */
+let ticks=new Map();   // code -> boolean
+
 function generate(){
   const raw=combinedText();
   $("riskBar").classList.add("hidden");
-  const {hits,negated}=match(raw);
+  lastResult = raw.trim() ? match(raw) : null;
+  if(lastResult){
+    /* The engine has found positive evidence for this code, so it stops being
+       an assertion and becomes a finding — it leaves the manual list and takes
+       its place on the certainty scale with its tick and evidence terms. Its
+       selection state travels with it: promotion must not quietly deselect a
+       code the clinician asserted, nor re-select one they had ruled out. */
+    const hit=new Set(lastResult.hits.map(r=>r.code));
+    manual.forEach(m=>{ if(hit.has(m.code)) ticks.set(m.code,m.checked); });
+    manual=manual.filter(m=>!hit.has(m.code));
+  }
+  renderResults({animate:true});
+}
+
+function renderResults(opts){
+  const animate=!!(opts&&opts.animate);
   const box=$("results");
-  if(!raw.trim()){ box.innerHTML=`<div class="empty">Paste a clinical summary above, then press <strong>Generate</strong>.</div>`; $("matchStat").textContent=""; return; }
-  if(!hits.length && !negated.length){ box.innerHTML=`<div class="empty">No codes matched. Try adding more clinical detail, or search the Reference list.</div>`; $("matchStat").textContent="0 matches"; return; }
+  /* A silent repaint — adding or removing a code — must not discard tick
+     changes the user has made, including a deliberate override of a negated
+     row. A fresh Generate still resets engine rows to their tier defaults. */
+  const keep=animate?null:new Map([...box.querySelectorAll('input[type=checkbox][data-code]')].map(c=>[c.dataset.code,c.checked]));
+  const hits=lastResult?lastResult.hits:[];
+  /* A hand-added code outranks an inferred negation, so the negated duplicate
+     is filtered out of the display — but lastResult itself is left intact, so
+     removing the manual row brings the negated row straight back. */
+  const manCodes=new Set(manual.map(m=>m.code));
+  const negated=(lastResult?lastResult.negated:[]).filter(r=>!manCodes.has(r.code));
+  if(!lastResult && !manual.length){ box.innerHTML=initEmpty(); $("matchStat").textContent=""; updateRisk(); return; }
+  if(lastResult && !hits.length && !negated.length && !manual.length){
+    box.innerHTML=`<div class="empty">No codes matched. Try adding more clinical detail, or search the Reference list.</div>`;
+    $("matchStat").textContent="0 matches"; updateRisk(); return;
+  }
   /* One continuous certainty scale: rows descend by confidence, and the
      rules mark where suggested becomes possible, and possible becomes negated. */
   const byConf=[...hits].sort((a,b)=>b.conf-a.conf||a.code.localeCompare(b.code));
   const strong=byConf.filter(h=>h.conf>=45);
   const maybe=byConf.filter(h=>h.conf<45);
-  const total=strong.length+maybe.length+negated.length;
+  const total=manual.length+strong.length+maybe.length+negated.length;
   const drawDelay=total*18+120;   // rules draw once every row has landed
   let i=0;
   const rowHtml=(r,checked,tier)=>`
@@ -1197,11 +1285,25 @@ function generate(){
       </div>
       <span class="cb"><input type="checkbox" data-code="${esc(r.code)}" data-desc="${esc(r.desc)}" data-cat="${esc(r.cat)}" ${checked?"checked":""}><i class="box"></i></span>
     </label>`;
+  /* An engine row honours a deliberate tick decision where one exists, and
+     falls back to its tier default where none does. */
+  const tick=(r,def)=>ticks.has(r.code)?ticks.get(r.code):def;
+  const manRowHtml=m=>`
+    <label class="res man" style="--i:${i++}">
+      <span class="gutter"></span>
+      <div class="res-main">
+        <span class="res-code">${esc(m.code)}</span><span class="res-desc">${esc(m.desc)}</span>
+        <div class="res-sub"><span class="res-meta">${esc(m.cat)}</span></div>
+      </div>
+      <button type="button" class="res-x" data-remove="${esc(m.code)}" aria-label="Remove ${esc(m.code)}">&times;</button>
+      <span class="cb"><input type="checkbox" data-code="${esc(m.code)}" data-desc="${esc(m.desc)}" data-cat="${esc(m.cat)}" data-manual="1" ${m.checked?"checked":""}><i class="box"></i></span>
+    </label>`;
   const rule=label=>`<div class="thresh"><i class="pre" style="--d:${drawDelay}ms"></i><b>${label}</b><i style="--d:${drawDelay}ms"></i></div>`;
-  let html=`<div class="certainty">`;
-  if(strong.length) html+=rule(`Suggested &middot; ${strong.length}`)+strong.map(r=>rowHtml(r,true,"t1")).join("");
-  if(maybe.length) html+=rule(`Below threshold &mdash; possible &middot; ${maybe.length}`)+maybe.map(r=>rowHtml(r,false,"t2")).join("");
-  if(negated.length) html+=rule(`Negated &mdash; not selected &middot; ${negated.length}`)+negated.map(r=>rowHtml(r,false,"neg")).join("");
+  let html=`<div class="certainty${animate?"":" no-anim"}">`;
+  if(manual.length) html+=rule(`Added manually &middot; ${manual.length}`)+manual.map(manRowHtml).join("");
+  if(strong.length) html+=rule(`Suggested &middot; ${strong.length}`)+strong.map(r=>rowHtml(r,tick(r,true),"t1")).join("");
+  if(maybe.length) html+=rule(`Below threshold &mdash; possible &middot; ${maybe.length}`)+maybe.map(r=>rowHtml(r,tick(r,false),"t2")).join("");
+  if(negated.length) html+=rule(`Negated &mdash; not selected &middot; ${negated.length}`)+negated.map(r=>rowHtml(r,tick(r,false),"neg")).join("");
   html+=`</div>`;
   html+=`
     <div class="toolbar" style="margin-top:18px">
@@ -1212,14 +1314,140 @@ function generate(){
     </div>
     <div class="output-box hidden" id="outBox"><textarea id="outText" readonly></textarea></div>`;
   box.innerHTML=html;
-  $("matchStat").textContent=`${hits.length} match${hits.length!==1?"es":""}${negated.length?` · ${negated.length} negated`:""}`;
+  if(keep) box.querySelectorAll('input[type=checkbox][data-code]').forEach(c=>{
+    if(keep.has(c.dataset.code)) c.checked=keep.get(c.dataset.code);
+  });
+  const stat=[];
+  if(lastResult) stat.push(`${hits.length} match${hits.length!==1?"es":""}`);
+  if(negated.length) stat.push(`${negated.length} negated`);
+  if(manual.length) stat.push(`${manual.length} added`);
+  $("matchStat").textContent=stat.join(" · ");
+  wireResults(box);
+}
+
+function wireResults(box){
   $("copyBtn").onclick=copySelected;
   $("csvBtn").onclick=downloadCSV;
-  $("allBtn").onclick=()=>{box.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=true);updateRisk();};
-  $("noneBtn").onclick=()=>{box.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=false);updateRisk();};
+  /* Select all / Clear selection must write back to manual[] too, or the next
+     Generate would restore whatever the array still believed. */
+  const setAll=v=>{
+    box.querySelectorAll('input[type=checkbox]').forEach(c=>c.checked=v);
+    manual.forEach(m=>m.checked=v);
+    ticks.forEach((_,k)=>ticks.set(k,v));
+    updateRisk();
+  };
+  $("allBtn").onclick=()=>setAll(true);
+  $("noneBtn").onclick=()=>setAll(false);
   box.querySelectorAll('input[type=checkbox]').forEach(c=>c.addEventListener('change',updateRisk));
+  box.querySelectorAll('input[data-manual]').forEach(c=>c.addEventListener('change',()=>{
+    const m=manual.find(x=>x.code===c.dataset.code); if(m) m.checked=c.checked;
+  }));
+  /* Only codes already under explicit control are tracked; an ordinary tick of
+     an engine row still resets on the next Generate. */
+  box.querySelectorAll('input[type=checkbox]:not([data-manual])').forEach(c=>c.addEventListener('change',()=>{
+    if(ticks.has(c.dataset.code)) ticks.set(c.dataset.code,c.checked);
+  }));
+  /* The × sits inside a <label>, so a plain click would also toggle the
+     checkbox on its way through. Stop it. */
+  box.querySelectorAll('.res-x').forEach(b=>b.addEventListener('click',e=>{
+    e.preventDefault(); e.stopPropagation();
+    const code=b.dataset.remove;
+    /* Drop the row before repainting: renderResults harvests tick state from
+       the DOM, and a removed code must not hand its tick to a negated row
+       returning in its place. Removal has to mean deselection. */
+    const row=b.closest(".res"); if(row) row.remove();
+    manual=manual.filter(m=>m.code!==code);
+    renderResults({animate:false});
+    toast("Removed "+code);
+  }));
   updateRisk();
 }
+
+/* ── Add diagnosis: typeahead over the reference list ───────────────
+   Only codes that already exist in SEED can be added. The tool never
+   invents a code, so everything it emits stays verifiable. */
+let dxOpts=[], dxHi=-1;
+
+function dxSearch(q){
+  const s=q.trim().toLowerCase(); if(!s) return [];
+  const byCode=[], byDesc=[];
+  refData.forEach(d=>{
+    const c=d.code.toLowerCase();
+    if(c.indexOf(s)===0) byCode.push(d);
+    else if(d.desc.toLowerCase().indexOf(s)>=0) byDesc.push(d);
+  });
+  return byCode.concat(byDesc).slice(0,8);
+}
+
+function dxRender(){
+  const list=$("addList"), inp=$("addDx");
+  if(!dxOpts.length && !inp.value.trim()){ dxClose(); return; }
+  list.innerHTML = dxOpts.length
+    ? dxOpts.map((d,n)=>`<div class="addopt${n===dxHi?" on":""}" role="option" id="dxo${n}" aria-selected="${n===dxHi}" data-n="${n}"><span class="oc">${esc(d.code)}</span><span class="od">${esc(d.desc)}</span></div>`).join("")
+    : `<div class="addnone">No match in the reference list &mdash; try the Reference list tab.</div>`;
+  list.classList.remove("hidden");
+  inp.setAttribute("aria-expanded","true");
+  if(dxHi>=0) inp.setAttribute("aria-activedescendant","dxo"+dxHi);
+  else inp.removeAttribute("aria-activedescendant");
+}
+
+function dxClose(){
+  $("addList").classList.add("hidden");
+  $("addDx").setAttribute("aria-expanded","false");
+  $("addDx").removeAttribute("aria-activedescendant");
+  dxOpts=[]; dxHi=-1;
+}
+
+function addDiagnosis(d){
+  if(!d) return;
+  const box=$("results");
+  const cb=[...box.querySelectorAll('input[data-code]')].find(c=>c.dataset.code===d.code);
+  if(cb){
+    /* Already present — anywhere, including negated. Typing a negated code in
+       is a deliberate override, so tick it, but leave the row's struck-through
+       styling and quoted clause intact so the override stays visible. */
+    cb.checked=true;
+    const m=manual.find(x=>x.code===d.code); if(m) m.checked=true;
+    /* An override applied to a row already on screen has to outlive the next
+       Generate, or the same intent produces different results depending on
+       whether the clinician added the code before or after generating. */
+    if(!m) ticks.set(d.code,true);
+    updateRisk();
+    const row=cb.closest(".res");
+    if(row){
+      const rm=matchMedia("(prefers-reduced-motion: reduce)").matches;
+      row.scrollIntoView({behavior:rm?"auto":"smooth",block:"center"});
+      row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
+    }
+    toast("Already in the list");
+  } else {
+    manual.push({code:d.code,desc:d.desc,cat:d.cat,checked:true});
+    renderResults({animate:false});
+    toast("Added "+d.code);
+  }
+  $("addDx").value=""; dxClose(); $("addDx").focus();
+}
+
+$("addDx").addEventListener("input",()=>{
+  dxOpts=dxSearch($("addDx").value);
+  dxHi=dxOpts.length?0:-1;
+  dxRender();
+});
+$("addDx").addEventListener("keydown",e=>{
+  if(e.key==="ArrowDown"){ if(!dxOpts.length) return; e.preventDefault(); dxHi=(dxHi+1)%dxOpts.length; dxRender(); }
+  else if(e.key==="ArrowUp"){ if(!dxOpts.length) return; e.preventDefault(); dxHi=(dxHi-1+dxOpts.length)%dxOpts.length; dxRender(); }
+  else if(e.key==="Enter"){ e.preventDefault(); if(dxHi>=0&&dxOpts[dxHi]) addDiagnosis(dxOpts[dxHi]); }
+  else if(e.key==="Escape"){ dxClose(); }
+});
+/* mousedown, not click: it fires before the input blurs, so preventDefault
+   keeps focus in the box and the option is still on screen when we read it. */
+$("addList").addEventListener("mousedown",e=>{
+  const o=e.target.closest(".addopt"); if(!o) return;
+  e.preventDefault();
+  addDiagnosis(dxOpts[+o.dataset.n]);
+});
+document.addEventListener("click",e=>{ if(!e.target.closest(".addwrap")) dxClose(); });
+
 function selected(){
   return [...document.querySelectorAll('#results input[type=checkbox]:checked')]
     .map(c=>({code:c.dataset.code,desc:c.dataset.desc,cat:c.dataset.cat}));
@@ -1239,7 +1467,15 @@ function downloadCSV(){
   a.download="icd10-problem-list.csv"; a.click(); toast(`Exported ${sel.length} codes`);
 }
 $("genBtn").onclick=generate;
-$("clearBtn").onclick=()=>{["inHx","inSenior","inExtra"].forEach(id=>$(id).value="");$("results").innerHTML=initEmpty();$("matchStat").textContent="";$("riskBar").classList.add("hidden");$("summaryBox").classList.add("hidden");$("inHx").focus();};
+$("clearBtn").onclick=()=>{
+  ["inHx","inSenior","inExtra"].forEach(id=>$(id).value="");
+  manual=[]; lastResult=null; ticks.clear();
+  $("addDx").value=""; dxClose();
+  renderResults({animate:false});
+  $("riskBar").classList.add("hidden");
+  $("summaryBox").classList.add("hidden");
+  $("inHx").focus();
+};
 ["inHx","inSenior","inExtra"].forEach(id=>$(id).addEventListener("keydown",e=>{ if((e.metaKey||e.ctrlKey)&&e.key==="Enter") generate(); }));
 
 /* ═══════════════════════════════════════════════════════════════════
