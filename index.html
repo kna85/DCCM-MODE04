@@ -1184,7 +1184,14 @@ function buildSummary(){
   const clean=t=>t.replace(/\s+/g," ").trim();
   const hx=clean(val("inHx")), sr=clean(val("inSenior")), ex=clean(val("inExtra"));
   let sel=selected();
-  if(!sel.length){ sel=match(combinedText()).hits.map(h=>({code:h.code,desc:h.desc,cat:h.cat})); }
+  /* An empty selection with a list on screen is a decision, not an oversight —
+     the clinician has rejected every code, so the summary carries none. The
+     matcher only stands in when there is no rendered list to read at all, which
+     is pressing Generate summary before Generate ICD-10 list. Reading the
+     rendered rows is also what lets hand-added codes reach the summary; a fresh
+     match() would never see them. */
+  if(!sel.length && !$("results").querySelector('input[type=checkbox]'))
+    sel=match(combinedText()).hits.map(h=>({code:h.code,desc:h.desc,cat:h.cat}));
   const risk=estimateRisk(sel);
   const tail=[];
   if(sel.length) tail.push("Active problems (ICD-10): "+sel.map(s=>`${s.desc} (${s.code})`).join("; ")+".");
@@ -1621,6 +1628,17 @@ function fallbackId(id){ return id.indexOf("q4f16_1") >= 0 ? id.replace("q4f16_1
    This keeps every code grounded in the reviewed SEED list and honours negation. */
 function groundedCodesBlock(text){
   try {
+    /* The Coder tab's ticked rows are a reviewed list — a clinician has looked
+       at each one, and it can hold codes they added by hand that no matcher
+       would ever find. That outranks a fresh match(), so it wins whenever it
+       exists. The heading names which list this is, because this tab's textarea
+       can hold a different note from the Coder tab's panes. */
+    const sel = (typeof window.selected === "function") ? window.selected() : [];
+    if (sel.length) {
+      const picked = ["Selected Critical Care ICD-10 Codes (your reviewed selection on the Coder tab — verify against the institution's current ICD-10-CM master before clinical use)"];
+      sel.forEach(s => picked.push("  " + s.code + " — " + s.desc));
+      return picked.join("\n");
+    }
     if (typeof window.match !== "function") return "Suggested ICD-10 codes: (coder engine unavailable).";
     const r = window.match(text);
     const hits = (r && r.hits) || [];
